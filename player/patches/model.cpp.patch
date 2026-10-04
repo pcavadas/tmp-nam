@@ -108,16 +108,17 @@ index 2a103f4..52dbe49 100644
    // Finally set when we're ready:
    _active_index.store(active_index, std::memory_order_release);
 diff --git a/NAM/container.h b/NAM/container.h
-index dccc914..aed2870 100644
+index dccc914..074a9f4 100644
 --- a/NAM/container.h
 +++ b/NAM/container.h
-@@ -37,7 +37,9 @@ public:
+@@ -37,7 +37,10 @@ public:
    void process(NAM_SAMPLE** input, NAM_SAMPLE** output, const int num_frames) override;
    void prewarm() override;
    void Reset(const double sampleRate, const int maxBufferSize) override;
 +  void SetPrewarmOnReset(const bool prewarmOnReset) override;
    void SetSlimmableSize(const double val) override;
 +  long ZeroInputSettleSamples() override { return _submodels[_active_index.load()].model->ZeroInputSettleSamples(); }
++  const char* ImplementationName() override { return _submodels[_active_index.load()].model->ImplementationName(); }
 
  protected:
    int PrewarmSamples() override { return 0; }
@@ -445,7 +446,7 @@ index e975001..1925f93 100644
    }
 
 diff --git a/NAM/dsp.h b/NAM/dsp.h
-index 1fadcf7..92cf81d 100644
+index 1fadcf7..c42957e 100644
 --- a/NAM/dsp.h
 +++ b/NAM/dsp.h
 @@ -1,6 +1,8 @@
@@ -518,7 +519,7 @@ index 1fadcf7..92cf81d 100644
 
  /// \brief Base class for all DSP models
  ///
-@@ -72,6 +122,16 @@ public:
+@@ -72,6 +122,20 @@ public:
    /// some possibilities (e.g. models that "are noisy").
    virtual void prewarm();
 
@@ -532,10 +533,14 @@ index 1fadcf7..92cf81d 100644
 +  /// the generic WaveNet's), which disables any such skip.
 +  virtual long ZeroInputSettleSamples() { return -1; }
 +
++  /// \brief Short name of the implementation that processes audio (for host logs),
++  /// e.g. "generic" or a specialized fast path. Containers report their active model.
++  virtual const char* ImplementationName() { return "generic"; }
++
    /// \brief Process audio frames
    ///
    /// \param input Input audio buffers. Double pointer where the first pointer indexes channels
-@@ -134,20 +194,27 @@ public:
+@@ -134,20 +198,27 @@ public:
 
    /// \brief General function for resetting the DSP unit
    ///
@@ -570,7 +575,7 @@ index 1fadcf7..92cf81d 100644
 
    /// \brief Set the input level
    /// \param inputLevel Input level in dBu
-@@ -178,6 +245,7 @@ protected:
+@@ -178,6 +249,7 @@ protected:
    double mExternalSampleRate = -1.0;
    // The largest buffer I expect to be told to process:
    int mMaxBufferSize = 0;
@@ -900,7 +905,7 @@ index 5d0e9b3..0603b5a 100644
  };
  } // namespace nam
 diff --git a/NAM/wavenet/a2_fast.cpp b/NAM/wavenet/a2_fast.cpp
-index 276ed1a..b4dbb51 100644
+index 276ed1a..658a7b5 100644
 --- a/NAM/wavenet/a2_fast.cpp
 +++ b/NAM/wavenet/a2_fast.cpp
 @@ -25,6 +25,10 @@
@@ -923,15 +928,16 @@ index 276ed1a..b4dbb51 100644
  //
  // Weight storage: column-major per kernel tap. For a (out_ch × in_ch) matrix
  // at tap k, element (row=i, col=j) lives at w[k][j * out_ch + i]. All 1×1
-@@ -66,6 +70,7 @@ public:
+@@ -66,6 +70,8 @@ public:
    ~A2FastModel() override = default;
 
    void process(NAM_SAMPLE** input, NAM_SAMPLE** output, int num_frames) override;
 +  long ZeroInputSettleSamples() override { return _prewarm_samples; }
++  const char* ImplementationName() override { return Channels == 3 ? "a2_fast<3>" : "a2_fast<8>"; }
 
  protected:
    void SetMaxBufferSize(int maxBufferSize) override;
-@@ -285,6 +290,139 @@ int next_pow2(int v)
+@@ -285,6 +291,139 @@ int next_pow2(int v)
      p <<= 1;
    return p;
  }
@@ -1071,7 +1077,7 @@ index 276ed1a..b4dbb51 100644
  } // namespace
 
  template <int Channels>
-@@ -348,8 +486,7 @@ void A2FastModel<Channels>::_ring_write(Layer& L, int num_frames)
+@@ -348,8 +487,7 @@ void A2FastModel<Channels>::_ring_write(Layer& L, int num_frames)
      std::memcpy(hist, src + static_cast<size_t>(first) * Channels,
                  static_cast<size_t>(num_frames - first) * Channels * sizeof(float));
    }
@@ -1081,7 +1087,7 @@ index 276ed1a..b4dbb51 100644
    L.write_pos = (wp + num_frames) & L.pow2_mask;
    #else
    if (L.write_pos + num_frames > L.history_cols)
-@@ -380,8 +517,7 @@ void A2FastModel<Channels>::_head_ring_write(int num_frames)
+@@ -380,8 +518,7 @@ void A2FastModel<Channels>::_head_ring_write(int num_frames)
      std::memcpy(hist, src + static_cast<size_t>(first) * Channels,
                  static_cast<size_t>(num_frames - first) * Channels * sizeof(float));
    }
@@ -1091,7 +1097,7 @@ index 276ed1a..b4dbb51 100644
    _head_write_pos = (wp + num_frames) & _head_pow2_mask;
    #else
    const int keep = kHeadKernelSize - 1;
-@@ -553,6 +689,17 @@ void A2FastModel<Channels>::_layer_forward_k(Layer& L, const float* cond, int nu
+@@ -553,6 +690,17 @@ void A2FastModel<Channels>::_layer_forward_k(Layer& L, const float* cond, int nu
    }
    else
    {
@@ -1109,7 +1115,7 @@ index 276ed1a..b4dbb51 100644
      // Use Eigen's tuned 8x8 × 8xN GEMM for the whole block at once. Unlike a
      // small-tile version, this hits Eigen's actual GEMM kernel (tuned for
      // inner dimensions of ~64) rather than its tiny-matrix fallback path.
-@@ -763,12 +910,12 @@ bool is_a2_shape(const nlohmann::json& config, int* channels)
+@@ -763,12 +911,12 @@ bool is_a2_shape(const nlohmann::json& config, int* channels)
    if (head_it != config.end() && !head_it->is_null())
      return false;
 
@@ -1125,7 +1131,7 @@ index 276ed1a..b4dbb51 100644
 
    // in_channels defaults to 1, must be 1
    if (config.value("in_channels", 1) != 1)
-@@ -901,3 +1048,521 @@ std::unique_ptr<ModelConfig> create_a2_fast_config(const nlohmann::json& config,
+@@ -901,3 +1049,524 @@ std::unique_ptr<ModelConfig> create_a2_fast_config(const nlohmann::json& config,
  } // namespace nam
 
  #endif // NAM_ENABLE_A2_FAST
@@ -1425,6 +1431,7 @@ index 276ed1a..b4dbb51 100644
 +  A1FastModel(const A1Shape& shape, const std::vector<float>& weights, const double expected_sample_rate)
 +  : DSP(/*in_channels=*/1, /*out_channels=*/1, expected_sample_rate)
 +  , _fast_tanh(nam::activations::Activation::using_fast_tanh)
++  , _name("a1_fast<" + std::to_string(shape.c1) + "," + std::to_string(shape.c2) + ">")
 +  {
 +    init_array(_a1, 1, 1, shape.c2, CP2, shape.head_bias1, shape.dilations1);
 +    init_array(_a2, shape.c1, CP1, 1, 1, shape.head_bias2, shape.dilations2);
@@ -1476,6 +1483,7 @@ index 276ed1a..b4dbb51 100644
 +  }
 +
 +  long ZeroInputSettleSamples() override { return _receptive_field; }
++  const char* ImplementationName() override { return _name.c_str(); }
 +
 +protected:
 +  void SetMaxBufferSize(int maxBufferSize) override
@@ -1525,6 +1533,7 @@ index 276ed1a..b4dbb51 100644
 +  Array<CP2> _a2;
 +  float _head_scale = 0.0f;
 +  bool _fast_tanh = true;
++  std::string _name;
 +  int _receptive_field = 0;
 +  std::vector<float> _cond, _x1, _h1, _x2, _h2;
 +};
@@ -1799,7 +1808,7 @@ index 19b019e..3314377 100644
  {
    const size_t num_arrays = _original_params.size();
 diff --git a/NAM/wavenet/slimmable.h b/NAM/wavenet/slimmable.h
-index f0687c0..7468ba1 100644
+index f0687c0..54ce2b4 100644
 --- a/NAM/wavenet/slimmable.h
 +++ b/NAM/wavenet/slimmable.h
 @@ -3,11 +3,8 @@
@@ -1816,17 +1825,18 @@ index f0687c0..7468ba1 100644
 
  #include "../dsp.h"
  #include "json.hpp"
-@@ -48,7 +45,9 @@ public:
+@@ -48,7 +45,10 @@ public:
    void process(NAM_SAMPLE** input, NAM_SAMPLE** output, const int num_frames) override;
    void prewarm() override;
    void Reset(const double sampleRate, const int maxBufferSize) override;
 +  void SetPrewarmOnReset(const bool prewarmOnReset) override;
    void SetSlimmableSize(const double val) override;
 +  long ZeroInputSettleSamples() override { return _active_model ? _active_model->ZeroInputSettleSamples() : -1; }
++  const char* ImplementationName() override { return _active_model ? _active_model->ImplementationName() : "generic"; }
 
  protected:
    int PrewarmSamples() override { return 0; }
-@@ -70,7 +69,7 @@ private:
+@@ -70,7 +70,7 @@ private:
      std::shared_ptr<DSP> model;
      std::vector<int> channels;
    };

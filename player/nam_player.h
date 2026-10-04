@@ -55,6 +55,9 @@ class Player final {
   void process(const float* input, float* output, std::size_t frames);
 
   int model_rate() const noexcept { return model_rate_; }
+  // Which Core implementation runs the network ("generic", "a2_fast<8>", ...).
+  // Control/worker thread only, like prepare().
+  const char* implementation() const { return dsp_->ImplementationName(); }
   std::size_t latency_frames() const noexcept { return latency_frames_; }
   double latency_seconds() const noexcept;
   const Counters& counters() const noexcept { return counters_; }

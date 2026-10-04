@@ -176,6 +176,7 @@ static nlohmann::json info(const tmp_nam::ModelFile& file, const tmp_nam::Player
           {"size", file.options.size}, {"resampler_quality", file.options.resampler_quality},
           {"prepared_max_block", file.options.max_block},
           {"conversion_latency_frames", player.latency_frames()},
+          {"implementation", player.implementation()},
           {"host_machine", host.machine}, {"host_system", host.sysname}};
 }
 static void emit(const nlohmann::json& data) {

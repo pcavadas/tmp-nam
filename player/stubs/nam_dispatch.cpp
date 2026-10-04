@@ -682,11 +682,11 @@ loadfile_result_t loadfile_handler(void* self, void* str_ref) {
       throw std::runtime_error("stale NAM publication rejected");
     ticket_started = false;
     logf("NAM ready before load return path=%s sha256=%s engine_rate=%d "
-         "model_rate=%d latency_frames=%zu slot=%zu generation=%lu",
+         "model_rate=%d latency_frames=%zu slot=%zu generation=%lu impl=%s",
          entry->path.c_str(), entry->hash.c_str(), kEngineRate,
          entry->player->model_rate(),
          static_cast<size_t>(entry->player->latency_frames()), entry->slot,
-         (unsigned long)entry->generation);
+         (unsigned long)entry->generation, entry->player->implementation());
   } catch (const std::exception& error) {
     if (ticket_started) {
       if (g_loader) g_loader->cancel(ticket.index, ticket.generation);
