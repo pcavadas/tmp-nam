@@ -37,14 +37,14 @@ mkdir -p "$CORE_DIR"
 source "$SCRIPT_DIR/nam_build_common.sh"
 ARCHIVER="${AR:-ar}"
 command -v "$ARCHIVER" >/dev/null || { echo "Missing archiver: $ARCHIVER" >&2; exit 1; }
-source_stamp="$(nam_archive_key "$CXX" "$ARCHIVER" "$0" "$OPT_FLAGS" -std=c++17 -DNAM_SAMPLE_FLOAT)"
+source_stamp="$(nam_archive_key "$CXX" "$ARCHIVER" "$0" "$OPT_FLAGS" -std=c++17 -DNAM_SAMPLE_FLOAT "${NAM_FEATURES[@]}")"
 if ! nam_archive_current "$CORE_LIB" "$source_stamp"; then
   rm -f "$CORE_DIR"/*.o "$CORE_LIB"
 
   while IFS= read -r src; do
     obj="$CORE_DIR/$(echo "$src" | sed "s|$NAM_DIR/||; s|/|_|g; s|\.cpp$|.o|")"
     # shellcheck disable=SC2086
-    "$CXX" -std=c++17 $OPT_FLAGS -Wall -Wextra -DNAM_SAMPLE_FLOAT \
+    "$CXX" -std=c++17 $OPT_FLAGS -Wall -Wextra -DNAM_SAMPLE_FLOAT "${NAM_FEATURES[@]}" \
       -isystem "$NAM_DIR/Dependencies/eigen" -I"$NAM_DIR/Dependencies/nlohmann" -I"$NAM_DIR" \
       -c "$src" -o "$obj"
   done < <(find "$NAM_DIR/NAM" -name '*.cpp' | sort)
@@ -53,7 +53,7 @@ if ! nam_archive_current "$CORE_LIB" "$source_stamp"; then
 fi
 
 read -r -a OPT_ARGS <<< "$OPT_FLAGS"
-COMMON=(-std=c++17 "${OPT_ARGS[@]}" -Wall -Wextra -DNAM_SAMPLE_FLOAT -DRANDOM_PREFIX=tmp_nam_speex -DOUTSIDE_SPEEX
+COMMON=(-std=c++17 "${OPT_ARGS[@]}" -Wall -Wextra -DNAM_SAMPLE_FLOAT "${NAM_FEATURES[@]}" -DRANDOM_PREFIX=tmp_nam_speex -DOUTSIDE_SPEEX
   -isystem "$NAM_DIR/Dependencies/eigen"
   -I"$NAM_DIR/Dependencies/nlohmann" -I"$NAM_DIR" -I"$SCRIPT_DIR"
   -I"$VENDOR_DIR/SpeexDSP/include")

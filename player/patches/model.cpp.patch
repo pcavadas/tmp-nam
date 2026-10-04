@@ -775,6 +775,237 @@ index 32825a5..d9653da 100644
  /// \param config Architecture-specific configuration (abstract base)
  /// \param weights Model weights (taken by value to allow move for WaveNet)
  /// \param metadata Model metadata (version, sample rate, loudness, levels)
+diff --git a/NAM/wavenet/a2_fast.cpp b/NAM/wavenet/a2_fast.cpp
+index 276ed1a..9f6b1ff 100644
+--- a/NAM/wavenet/a2_fast.cpp
++++ b/NAM/wavenet/a2_fast.cpp
+@@ -25,6 +25,10 @@
+
+   #include <Eigen/Dense>
+
++  #if defined(__aarch64__)
++    #include <arm_neon.h>
++  #endif
++
+   #include "../dsp.h"
+
+ namespace nam
+@@ -48,7 +52,7 @@ namespace
+ //   - condition_size == input_size == out_channels == 1
+ //   - LeakyReLU(0.01) on every layer, no gating, no FiLM, no head1x1
+ //   - layer1x1 active (groups=1), head rechannel conv k=16 bias=true
+-//   - head_scale == 0.01, no post-stack head
++//   - head_scale present (trained value is the last weight), no post-stack head
+ //
+ // Weight storage: column-major per kernel tap. For a (out_ch × in_ch) matrix
+ // at tap k, element (row=i, col=j) lives at w[k][j * out_ch + i]. All 1×1
+@@ -285,6 +289,139 @@ int next_pow2(int v)
+     p <<= 1;
+   return p;
+ }
++
++// Pow2 ring tail mirror: cols [pow2_size, pow2_size + mbs) must equal cols
++// [0, mbs). Every column there was mirrored when last written (or is zero from
++// SetMaxBufferSize), so a block only needs to copy the columns it wrote that
++// fall inside [0, mbs). Same contents as a full refresh, without re-copying
++// mbs columns per layer per block.
++void mirror_written_cols(float* hist, int channels, int pow2_size, int mbs, int begin, int end)
++{
++  end = std::min(end, mbs);
++  if (begin < end)
++    std::memcpy(hist + static_cast<size_t>(pow2_size + begin) * channels, hist + static_cast<size_t>(begin) * channels,
++                static_cast<size_t>(end - begin) * channels * sizeof(float));
++}
++
++// Mirror both segments of a ring write of num_frames columns starting at wp.
++void mirror_ring_write(float* hist, int channels, int pow2_size, int mbs, int wp, int num_frames)
++{
++  const int first = std::min(num_frames, pow2_size - wp);
++  mirror_written_cols(hist, channels, pow2_size, mbs, wp, wp + first);
++  mirror_written_cols(hist, channels, pow2_size, mbs, 0, num_frames - first);
++}
++
++  #if defined(__aarch64__)
++// -----------------------------------------------------------------------------
++// Fused 8-channel A2 layer on NEON: dilated conv (all taps) + bias + mixin +
++// LeakyReLU + head-sum accumulate + layer1x1 residual, without a z buffer.
++//
++// All matrices are column-major, so column j of an 8x8 weight is two q
++// registers and multiplies lane j of the input frame. Four frames are tiled
++// in registers (8 accumulators) so each weight column load feeds 8 FMAs.
++// tap_base[k] is the physical ring column of this block's first frame for
++// weight tap k; the ring's tail mirror makes every tap's frames contiguous.
++// -----------------------------------------------------------------------------
++    #define NAM_A2_FMA8(ACC_L, ACC_H, WL, WH, X, LANE) \
++      ACC_L = vfmaq_laneq_f32(ACC_L, WL, X, LANE);     \
++      ACC_H = vfmaq_laneq_f32(ACC_H, WH, X, LANE)
++
++    // Column J of W (at W + 8*J) times lane LANE of four frames' inputs.
++    #define NAM_A2_COL4(W, J, X0, X1, X2, X3, LANE, A0L, A0H, A1L, A1H, A2L, A2H, A3L, A3H) \
++      {                                                                                       \
++        const float32x4_t wl = vld1q_f32((W) + 8 * (J));                                     \
++        const float32x4_t wh = vld1q_f32((W) + 8 * (J) + 4);                                 \
++        NAM_A2_FMA8(A0L, A0H, wl, wh, X0, LANE);                                              \
++        NAM_A2_FMA8(A1L, A1H, wl, wh, X1, LANE);                                              \
++        NAM_A2_FMA8(A2L, A2H, wl, wh, X2, LANE);                                              \
++        NAM_A2_FMA8(A3L, A3H, wl, wh, X3, LANE);                                              \
++      }
++
++    // Full 8x8 matrix times one frame (XL = inputs 0..3, XH = inputs 4..7).
++    #define NAM_A2_GEMV8(W, XL, XH, AL, AH)                                                    \
++      {                                                                                       \
++        const float* const w_ = (W);                                                          \
++        NAM_A2_FMA8(AL, AH, vld1q_f32(w_ + 0), vld1q_f32(w_ + 4), XL, 0);                     \
++        NAM_A2_FMA8(AL, AH, vld1q_f32(w_ + 8), vld1q_f32(w_ + 12), XL, 1);                    \
++        NAM_A2_FMA8(AL, AH, vld1q_f32(w_ + 16), vld1q_f32(w_ + 20), XL, 2);                   \
++        NAM_A2_FMA8(AL, AH, vld1q_f32(w_ + 24), vld1q_f32(w_ + 28), XL, 3);                   \
++        NAM_A2_FMA8(AL, AH, vld1q_f32(w_ + 32), vld1q_f32(w_ + 36), XH, 0);                   \
++        NAM_A2_FMA8(AL, AH, vld1q_f32(w_ + 40), vld1q_f32(w_ + 44), XH, 1);                   \
++        NAM_A2_FMA8(AL, AH, vld1q_f32(w_ + 48), vld1q_f32(w_ + 52), XH, 2);                   \
++        NAM_A2_FMA8(AL, AH, vld1q_f32(w_ + 56), vld1q_f32(w_ + 60), XH, 3);                   \
++      }
++
++inline float32x4_t leaky_relu_q(const float32x4_t x)
++{
++  return vbslq_f32(vcgtq_f32(x, vdupq_n_f32(0.0f)), x, vmulq_f32(x, vdupq_n_f32(kLeakySlope)));
++}
++
++// Post-conv tail for one frame whose conv+bias result is (al, ah).
++inline void layer8_tail(float32x4_t al, float32x4_t ah, const float cond, const float* mixin_w, const float* l1x1_w,
++                        const float* l1x1_b, float* hsum, float* lin)
++{
++  al = leaky_relu_q(vfmaq_n_f32(al, vld1q_f32(mixin_w), cond));
++  ah = leaky_relu_q(vfmaq_n_f32(ah, vld1q_f32(mixin_w + 4), cond));
++  vst1q_f32(hsum, vaddq_f32(vld1q_f32(hsum), al));
++  vst1q_f32(hsum + 4, vaddq_f32(vld1q_f32(hsum + 4), ah));
++  float32x4_t ll = vaddq_f32(vld1q_f32(lin), vld1q_f32(l1x1_b));
++  float32x4_t lh = vaddq_f32(vld1q_f32(lin + 4), vld1q_f32(l1x1_b + 4));
++  NAM_A2_GEMV8(l1x1_w, al, ah, ll, lh);
++  vst1q_f32(lin, ll);
++  vst1q_f32(lin + 4, lh);
++}
++
++void layer8_neon(const float* hist, const int* tap_base, const int num_taps, const float* conv_w, const float* conv_b,
++                 const float* mixin_w, const float* l1x1_w, const float* l1x1_b, const float* cond, float* hsum,
++                 float* lin, const int num_frames)
++{
++  const float32x4_t bias_l = vld1q_f32(conv_b);
++  const float32x4_t bias_h = vld1q_f32(conv_b + 4);
++  int f = 0;
++  for (; f + 3 < num_frames; f += 4)
++  {
++    float32x4_t a0l = bias_l, a0h = bias_h, a1l = bias_l, a1h = bias_h;
++    float32x4_t a2l = bias_l, a2h = bias_h, a3l = bias_l, a3h = bias_h;
++    for (int k = 0; k < num_taps; k++)
++    {
++      const float* x = hist + static_cast<size_t>(tap_base[k] + f) * 8;
++      const float* w = conv_w + static_cast<size_t>(k) * 64;
++      const float32x4_t x0l = vld1q_f32(x), x0h = vld1q_f32(x + 4);
++      const float32x4_t x1l = vld1q_f32(x + 8), x1h = vld1q_f32(x + 12);
++      const float32x4_t x2l = vld1q_f32(x + 16), x2h = vld1q_f32(x + 20);
++      const float32x4_t x3l = vld1q_f32(x + 24), x3h = vld1q_f32(x + 28);
++      NAM_A2_COL4(w, 0, x0l, x1l, x2l, x3l, 0, a0l, a0h, a1l, a1h, a2l, a2h, a3l, a3h)
++      NAM_A2_COL4(w, 1, x0l, x1l, x2l, x3l, 1, a0l, a0h, a1l, a1h, a2l, a2h, a3l, a3h)
++      NAM_A2_COL4(w, 2, x0l, x1l, x2l, x3l, 2, a0l, a0h, a1l, a1h, a2l, a2h, a3l, a3h)
++      NAM_A2_COL4(w, 3, x0l, x1l, x2l, x3l, 3, a0l, a0h, a1l, a1h, a2l, a2h, a3l, a3h)
++      NAM_A2_COL4(w, 4, x0h, x1h, x2h, x3h, 0, a0l, a0h, a1l, a1h, a2l, a2h, a3l, a3h)
++      NAM_A2_COL4(w, 5, x0h, x1h, x2h, x3h, 1, a0l, a0h, a1l, a1h, a2l, a2h, a3l, a3h)
++      NAM_A2_COL4(w, 6, x0h, x1h, x2h, x3h, 2, a0l, a0h, a1l, a1h, a2l, a2h, a3l, a3h)
++      NAM_A2_COL4(w, 7, x0h, x1h, x2h, x3h, 3, a0l, a0h, a1l, a1h, a2l, a2h, a3l, a3h)
++    }
++    const size_t o = static_cast<size_t>(f) * 8;
++    layer8_tail(a0l, a0h, cond[f], mixin_w, l1x1_w, l1x1_b, hsum + o, lin + o);
++    layer8_tail(a1l, a1h, cond[f + 1], mixin_w, l1x1_w, l1x1_b, hsum + o + 8, lin + o + 8);
++    layer8_tail(a2l, a2h, cond[f + 2], mixin_w, l1x1_w, l1x1_b, hsum + o + 16, lin + o + 16);
++    layer8_tail(a3l, a3h, cond[f + 3], mixin_w, l1x1_w, l1x1_b, hsum + o + 24, lin + o + 24);
++  }
++  for (; f < num_frames; f++)
++  {
++    float32x4_t al = bias_l, ah = bias_h;
++    for (int k = 0; k < num_taps; k++)
++    {
++      const float* x = hist + static_cast<size_t>(tap_base[k] + f) * 8;
++      NAM_A2_GEMV8(conv_w + static_cast<size_t>(k) * 64, vld1q_f32(x), vld1q_f32(x + 4), al, ah);
++    }
++    const size_t o = static_cast<size_t>(f) * 8;
++    layer8_tail(al, ah, cond[f], mixin_w, l1x1_w, l1x1_b, hsum + o, lin + o);
++  }
++}
++
++    #undef NAM_A2_GEMV8
++    #undef NAM_A2_COL4
++    #undef NAM_A2_FMA8
++  #endif // __aarch64__
+ } // namespace
+
+ template <int Channels>
+@@ -348,8 +485,7 @@ void A2FastModel<Channels>::_ring_write(Layer& L, int num_frames)
+     std::memcpy(hist, src + static_cast<size_t>(first) * Channels,
+                 static_cast<size_t>(num_frames - first) * Channels * sizeof(float));
+   }
+-  std::memcpy(
+-    hist + static_cast<size_t>(L.pow2_size) * Channels, hist, static_cast<size_t>(mbs) * Channels * sizeof(float));
++  mirror_ring_write(hist, Channels, L.pow2_size, mbs, wp, num_frames);
+   L.write_pos = (wp + num_frames) & L.pow2_mask;
+   #else
+   if (L.write_pos + num_frames > L.history_cols)
+@@ -380,8 +516,7 @@ void A2FastModel<Channels>::_head_ring_write(int num_frames)
+     std::memcpy(hist, src + static_cast<size_t>(first) * Channels,
+                 static_cast<size_t>(num_frames - first) * Channels * sizeof(float));
+   }
+-  std::memcpy(
+-    hist + static_cast<size_t>(_head_pow2_size) * Channels, hist, static_cast<size_t>(mbs) * Channels * sizeof(float));
++  mirror_ring_write(hist, Channels, _head_pow2_size, mbs, wp, num_frames);
+   _head_write_pos = (wp + num_frames) & _head_pow2_mask;
+   #else
+   const int keep = kHeadKernelSize - 1;
+@@ -553,6 +688,17 @@ void A2FastModel<Channels>::_layer_forward_k(Layer& L, const float* cond, int nu
+   }
+   else
+   {
++  #if defined(__aarch64__)
++    if constexpr (Channels == 8)
++    {
++      int tap_base[K];
++      for (int k = 0; k < K; k++)
++        tap_base[k] = tap_base_phys(K - 1 - k);
++      layer8_neon(L.history.data(), tap_base, K, L.conv_w.data(), L.conv_b.data(), L.mixin_w.data(), L.l1x1_w.data(),
++                  L.l1x1_b.data(), cond, _head_sum.data(), _layer_in.data(), num_frames);
++      return;
++    }
++  #endif
+     // Use Eigen's tuned 8x8 × 8xN GEMM for the whole block at once. Unlike a
+     // small-tile version, this hits Eigen's actual GEMM kernel (tuned for
+     // inner dimensions of ~64) rather than its tiny-matrix fallback path.
+@@ -763,12 +909,12 @@ bool is_a2_shape(const nlohmann::json& config, int* channels)
+   if (head_it != config.end() && !head_it->is_null())
+     return false;
+
+-  // head_scale must be exactly 0.01
++  // head_scale must be present. Its value is not part of the shape: like
++  // WaveNet::set_weights_, A2FastModel takes the trained scale from the last
++  // weight, and trained A2 exports store values other than 0.01.
+   auto hs_it = config.find("head_scale");
+   if (hs_it == config.end() || !hs_it->is_number())
+     return false;
+-  if (!close_to(hs_it->get<float>(), kHeadScale))
+-    return false;
+
+   // in_channels defaults to 1, must be 1
+   if (config.value("in_channels", 1) != 1)
+diff --git a/NAM/wavenet/a2_fast.h b/NAM/wavenet/a2_fast.h
+index 03cf439..ed36bf6 100644
+--- a/NAM/wavenet/a2_fast.h
++++ b/NAM/wavenet/a2_fast.h
+@@ -31,7 +31,7 @@ namespace a2_fast
+ constexpr int kNumLayers = 23;
+ /// \brief Kernel size of the layer-array head rechannel convolution.
+ constexpr int kHeadKernelSize = 16;
+-/// \brief Head scale factor used by every A2 model.
++/// \brief Default head scale; the loader replaces it with the trained value stored as the last weight.
+ constexpr float kHeadScale = 0.01f;
+ /// \brief LeakyReLU negative-slope used by every layer.
+ constexpr float kLeakySlope = 0.01f;
 diff --git a/NAM/wavenet/model.cpp b/NAM/wavenet/model.cpp
 index eaf74ad..f49f513 100644
 --- a/NAM/wavenet/model.cpp
