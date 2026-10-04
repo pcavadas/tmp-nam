@@ -265,6 +265,7 @@ static int cmd_process(int argc, char** argv) {
   data["block_sequence"] = blocks;
   data["in_place"] = in_place;
   data["processed_frames"] = output.size();
+  data["skipped_model_frames"] = player->skipped_model_frames();
   data["load_time_seconds"] = std::chrono::duration<double>(t1-t0).count();
   data["inference_time_seconds"] = std::chrono::duration<double>(t3-t2).count();
 #if defined(NAM_DENSE8X8_DIAGNOSTICS) && defined(__aarch64__)

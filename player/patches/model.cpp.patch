@@ -108,17 +108,19 @@ index 2a103f4..52dbe49 100644
    // Finally set when we're ready:
    _active_index.store(active_index, std::memory_order_release);
 diff --git a/NAM/container.h b/NAM/container.h
-index dccc914..36aee5d 100644
+index dccc914..aed2870 100644
 --- a/NAM/container.h
 +++ b/NAM/container.h
-@@ -37,6 +37,7 @@ public:
+@@ -37,7 +37,9 @@ public:
    void process(NAM_SAMPLE** input, NAM_SAMPLE** output, const int num_frames) override;
    void prewarm() override;
    void Reset(const double sampleRate, const int maxBufferSize) override;
 +  void SetPrewarmOnReset(const bool prewarmOnReset) override;
    void SetSlimmableSize(const double val) override;
++  long ZeroInputSettleSamples() override { return _submodels[_active_index.load()].model->ZeroInputSettleSamples(); }
 
  protected:
+   int PrewarmSamples() override { return 0; }
 diff --git a/NAM/conv1d.cpp b/NAM/conv1d.cpp
 index b561786..ff4fe77 100644
 --- a/NAM/conv1d.cpp
@@ -443,7 +445,7 @@ index e975001..1925f93 100644
    }
 
 diff --git a/NAM/dsp.h b/NAM/dsp.h
-index 1fadcf7..c7727af 100644
+index 1fadcf7..92cf81d 100644
 --- a/NAM/dsp.h
 +++ b/NAM/dsp.h
 @@ -1,6 +1,8 @@
@@ -516,7 +518,24 @@ index 1fadcf7..c7727af 100644
 
  /// \brief Base class for all DSP models
  ///
-@@ -134,20 +184,27 @@ public:
+@@ -72,6 +122,16 @@ public:
+   /// some possibilities (e.g. models that "are noisy").
+   virtual void prewarm();
+
++  /// \brief Number of consecutive zero-valued input samples after which the output is
++  /// one exact constant until the input changes again.
++  ///
++  /// Feed-forward models whose per-frame arithmetic does not depend on the block size
++  /// return their receptive field; hosts may then skip processing on silent input and
++  /// repeat the settled output bit-exactly. -1 (the default) means unknown or never
++  /// (recurrent state, external conditioning, or block-size-dependent kernels such as
++  /// the generic WaveNet's), which disables any such skip.
++  virtual long ZeroInputSettleSamples() { return -1; }
++
+   /// \brief Process audio frames
+   ///
+   /// \param input Input audio buffers. Double pointer where the first pointer indexes channels
+@@ -134,20 +194,27 @@ public:
 
    /// \brief General function for resetting the DSP unit
    ///
@@ -551,7 +570,7 @@ index 1fadcf7..c7727af 100644
 
    /// \brief Set the input level
    /// \param inputLevel Input level in dBu
-@@ -178,6 +235,7 @@ protected:
+@@ -178,6 +245,7 @@ protected:
    double mExternalSampleRate = -1.0;
    // The largest buffer I expect to be told to process:
    int mMaxBufferSize = 0;
@@ -775,8 +794,113 @@ index 32825a5..d9653da 100644
  /// \param config Architecture-specific configuration (abstract base)
  /// \param weights Model weights (taken by value to allow move for WaveNet)
  /// \param metadata Model metadata (version, sample rate, loudness, levels)
+diff --git a/NAM/ring_buffer.cpp b/NAM/ring_buffer.cpp
+index 8f0919a..a0b08b7 100644
+--- a/NAM/ring_buffer.cpp
++++ b/NAM/ring_buffer.cpp
+@@ -1,4 +1,5 @@
+ #include "ring_buffer.h"
++#include <algorithm>
+ #include <cassert>
+
+ namespace nam
+@@ -9,6 +10,17 @@ void RingBuffer::Reset(const int channels, const int max_buffer_size)
+   // Store the max buffer size for external queries
+   _max_buffer_size = max_buffer_size;
+
++  if (_max_lookback >= max_buffer_size)
++  {
++    // Mirrored ring (see _ring_cols): ring + tail mirror, written from column 0.
++    _ring_cols = _max_lookback + max_buffer_size;
++    _storage.resize(channels, _ring_cols + max_buffer_size);
++    _storage.setZero();
++    _write_pos = 0;
++    return;
++  }
++  _ring_cols = 0;
++
+   // Calculate storage size: 2 * max_lookback + max_buffer_size
+   // This ensures we have enough room for:
+   // - max_lookback at the start (for history after rewind)
+@@ -31,6 +43,17 @@ void RingBuffer::Write(const Eigen::MatrixXf& input, const int num_frames)
+   // Assert that num_frames doesn't exceed max buffer size
+   assert(num_frames <= _max_buffer_size && "Write: num_frames must not exceed max_buffer_size");
+
++  if (_ring_cols)
++  {
++    const long first = std::min<long>(num_frames, _ring_cols - _write_pos);
++    _storage.middleCols(_write_pos, first).noalias() = input.leftCols(first);
++    if (first < num_frames)
++      _storage.leftCols(num_frames - first).noalias() = input.middleCols(first, num_frames - first);
++    MirrorColumns(_write_pos, _write_pos + first);
++    MirrorColumns(0, num_frames - first);
++    return;
++  }
++
+   // Check if we need to rewind
+   if (NeedsRewind(num_frames))
+     Rewind();
+@@ -50,6 +73,10 @@ Eigen::Block<Eigen::MatrixXf> RingBuffer::Read(const int num_frames, const long
+   assert(num_frames <= _max_buffer_size && "Read: num_frames must not exceed max_buffer_size");
+
+   long read_pos = _write_pos - lookback;
++  // Mirrored ring: read_pos < _ring_cols and num_frames <= max_buffer_size, so the block
++  // ends inside the tail, which holds copies of ring columns [0, max_buffer_size).
++  if (read_pos < 0 && _ring_cols)
++    read_pos += _ring_cols;
+
+   // Assert that read_pos is non-negative
+   // (Asserted by the access to _storage.block())
+@@ -59,6 +86,15 @@ Eigen::Block<Eigen::MatrixXf> RingBuffer::Read(const int num_frames, const long
+ void RingBuffer::Advance(const int num_frames)
+ {
+   _write_pos += num_frames;
++  if (_ring_cols && _write_pos >= _ring_cols)
++    _write_pos -= _ring_cols;
++}
++
++void RingBuffer::MirrorColumns(const long begin, long end)
++{
++  end = std::min<long>(end, _max_buffer_size);
++  if (begin < end)
++    _storage.middleCols(_ring_cols + begin, end - begin) = _storage.middleCols(begin, end - begin);
+ }
+
+ bool RingBuffer::NeedsRewind(const int num_frames) const
+@@ -93,4 +129,5 @@ void RingBuffer::Rewind()
+   // Reset write position to just after the copied history
+   _write_pos = _max_lookback;
+ }
++
+ } // namespace nam
+diff --git a/NAM/ring_buffer.h b/NAM/ring_buffer.h
+index 5d0e9b3..0603b5a 100644
+--- a/NAM/ring_buffer.h
++++ b/NAM/ring_buffer.h
+@@ -59,6 +59,8 @@ private:
+   // :param num_frames: Number of frames that will be written
+   // :return: true if rewind is needed
+   bool NeedsRewind(const int num_frames) const;
++  // Copy ring columns [begin, end) that fall inside [0, max_buffer_size) to the tail mirror.
++  void MirrorColumns(long begin, long end);
+   // Get current write position
+   long GetWritePos() const { return _write_pos; }
+
+@@ -66,5 +68,12 @@ private:
+   long _write_pos = 0; // Current write position
+   long _max_lookback = 0; // Maximum lookback needed when rewinding
+   int _max_buffer_size = 0; // Maximum buffer size passed to Reset()
++  // Long lookbacks (>= max_buffer_size) use a ring of max_lookback + max_buffer_size
++  // columns plus a max_buffer_size tail mirroring ring columns [0, max_buffer_size):
++  // reads stay contiguous and no write ever copies the whole history. The rewind it
++  // replaces copied max_lookback columns at once (about 64 KB for a 16-channel,
++  // dilation-512 layer), a periodic latency spike. Short lookbacks keep the rewind,
++  // which is cheaper for them than mirroring most writes. 0 = rewind mode.
++  long _ring_cols = 0;
+ };
+ } // namespace nam
 diff --git a/NAM/wavenet/a2_fast.cpp b/NAM/wavenet/a2_fast.cpp
-index 276ed1a..9f6b1ff 100644
+index 276ed1a..0a80cfc 100644
 --- a/NAM/wavenet/a2_fast.cpp
 +++ b/NAM/wavenet/a2_fast.cpp
 @@ -25,6 +25,10 @@
@@ -799,7 +923,15 @@ index 276ed1a..9f6b1ff 100644
  //
  // Weight storage: column-major per kernel tap. For a (out_ch × in_ch) matrix
  // at tap k, element (row=i, col=j) lives at w[k][j * out_ch + i]. All 1×1
-@@ -285,6 +289,139 @@ int next_pow2(int v)
+@@ -66,6 +70,7 @@ public:
+   ~A2FastModel() override = default;
+
+   void process(NAM_SAMPLE** input, NAM_SAMPLE** output, int num_frames) override;
++  long ZeroInputSettleSamples() override { return _prewarm_samples; }
+
+ protected:
+   void SetMaxBufferSize(int maxBufferSize) override;
+@@ -285,6 +290,139 @@ int next_pow2(int v)
      p <<= 1;
    return p;
  }
@@ -939,7 +1071,7 @@ index 276ed1a..9f6b1ff 100644
  } // namespace
 
  template <int Channels>
-@@ -348,8 +485,7 @@ void A2FastModel<Channels>::_ring_write(Layer& L, int num_frames)
+@@ -348,8 +486,7 @@ void A2FastModel<Channels>::_ring_write(Layer& L, int num_frames)
      std::memcpy(hist, src + static_cast<size_t>(first) * Channels,
                  static_cast<size_t>(num_frames - first) * Channels * sizeof(float));
    }
@@ -949,7 +1081,7 @@ index 276ed1a..9f6b1ff 100644
    L.write_pos = (wp + num_frames) & L.pow2_mask;
    #else
    if (L.write_pos + num_frames > L.history_cols)
-@@ -380,8 +516,7 @@ void A2FastModel<Channels>::_head_ring_write(int num_frames)
+@@ -380,8 +517,7 @@ void A2FastModel<Channels>::_head_ring_write(int num_frames)
      std::memcpy(hist, src + static_cast<size_t>(first) * Channels,
                  static_cast<size_t>(num_frames - first) * Channels * sizeof(float));
    }
@@ -959,7 +1091,7 @@ index 276ed1a..9f6b1ff 100644
    _head_write_pos = (wp + num_frames) & _head_pow2_mask;
    #else
    const int keep = kHeadKernelSize - 1;
-@@ -553,6 +688,17 @@ void A2FastModel<Channels>::_layer_forward_k(Layer& L, const float* cond, int nu
+@@ -553,6 +689,17 @@ void A2FastModel<Channels>::_layer_forward_k(Layer& L, const float* cond, int nu
    }
    else
    {
@@ -977,7 +1109,7 @@ index 276ed1a..9f6b1ff 100644
      // Use Eigen's tuned 8x8 × 8xN GEMM for the whole block at once. Unlike a
      // small-tile version, this hits Eigen's actual GEMM kernel (tuned for
      // inner dimensions of ~64) rather than its tiny-matrix fallback path.
-@@ -763,12 +909,12 @@ bool is_a2_shape(const nlohmann::json& config, int* channels)
+@@ -763,12 +910,12 @@ bool is_a2_shape(const nlohmann::json& config, int* channels)
    if (head_it != config.end() && !head_it->is_null())
      return false;
 
@@ -1092,7 +1224,7 @@ index 19b019e..3314377 100644
  {
    const size_t num_arrays = _original_params.size();
 diff --git a/NAM/wavenet/slimmable.h b/NAM/wavenet/slimmable.h
-index f0687c0..e6897e3 100644
+index f0687c0..7468ba1 100644
 --- a/NAM/wavenet/slimmable.h
 +++ b/NAM/wavenet/slimmable.h
 @@ -3,11 +3,8 @@
@@ -1109,15 +1241,17 @@ index f0687c0..e6897e3 100644
 
  #include "../dsp.h"
  #include "json.hpp"
-@@ -48,6 +45,7 @@ public:
+@@ -48,7 +45,9 @@ public:
    void process(NAM_SAMPLE** input, NAM_SAMPLE** output, const int num_frames) override;
    void prewarm() override;
    void Reset(const double sampleRate, const int maxBufferSize) override;
 +  void SetPrewarmOnReset(const bool prewarmOnReset) override;
    void SetSlimmableSize(const double val) override;
++  long ZeroInputSettleSamples() override { return _active_model ? _active_model->ZeroInputSettleSamples() : -1; }
 
  protected:
-@@ -70,7 +68,7 @@ private:
+   int PrewarmSamples() override { return 0; }
+@@ -70,7 +69,7 @@ private:
      std::shared_ptr<DSP> model;
      std::vector<int> channels;
    };

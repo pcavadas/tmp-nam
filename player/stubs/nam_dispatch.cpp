@@ -27,6 +27,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/mman.h>
+#include <sched.h>
 #include <sys/syscall.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -291,6 +292,19 @@ struct NamEntry {
   std::atomic<uint64_t> blocks{0}, frames{0}, time_ns{0}, max_ns{0}, misses{0}, errors{0};
   std::atomic<uint64_t> src_underflows{0};
   tmp_nam::UtilizationHistogram utilization;
+  // TMP_NAM_PROFILE=2 diagnostics. The audio thread is the only writer (plain
+  // load/store, no RMW); the telemetry thread reads, logs per-window deltas
+  // against its own diag_prev_* snapshot, and resets the peaks.
+  std::atomic<uint64_t> diag_blocks{0}, diag_zero_in_blocks{0}, diag_value_zero_in_blocks{0};
+  std::atomic<uint64_t> diag_nonzero_in_samples{0}, diag_out_changes{0}, diag_skipped{0};
+  float diag_last_out = 0.0f;  // audio thread only
+  std::atomic<double> diag_in_sq{0.0}, diag_out_sq{0.0};
+  std::atomic<float> diag_in_peak{0.0f}, diag_out_peak{0.0f};
+  std::atomic<long> diag_tid{0};
+  std::atomic<int> diag_cpu{-1};
+  uint64_t diag_prev_blocks = 0, diag_prev_zero = 0, diag_prev_frames = 0;
+  uint64_t diag_prev_value_zero = 0, diag_prev_nonzero = 0, diag_prev_changes = 0, diag_prev_skipped = 0;
+  double diag_prev_in_sq = 0.0, diag_prev_out_sq = 0.0;
 };
 tmp_nam::Registry<NamEntry, kInstanceCapacity> g_players;
 using PrepareTask = std::packaged_task<std::shared_ptr<NamEntry>()>;
@@ -301,6 +315,9 @@ NamLoader* g_loader = nullptr;
 std::atomic<bool> g_armed{false};
 std::atomic<bool> g_hook_degraded{false};
 std::atomic<bool> g_profile{false};
+// TMP_NAM_PROFILE=2: per-entry signal levels and thread/CPU placement. Only
+// read inside the profiling branch, so the non-profiling callback is unchanged.
+std::atomic<bool> g_diag{false};
 thread_local int t_in_classify = 0;
 thread_local bool t_in_loadfile = false;
 thread_local bool t_loadfile_redirected_nam = false;
@@ -401,6 +418,45 @@ void telemetry_worker() {
            (unsigned long)entry->errors.load(std::memory_order_relaxed),
            (unsigned long)entry->src_underflows.load(std::memory_order_relaxed),
            entry->slot, (unsigned long)entry->generation);
+      if (!g_diag.load(std::memory_order_relaxed)) continue;
+      // Per-window values: deltas against this thread's previous snapshot.
+      const uint64_t diag_blocks = entry->diag_blocks.load(std::memory_order_relaxed);
+      const uint64_t zero_blocks = entry->diag_zero_in_blocks.load(std::memory_order_relaxed);
+      const uint64_t value_zero = entry->diag_value_zero_in_blocks.load(std::memory_order_relaxed);
+      const uint64_t nonzero = entry->diag_nonzero_in_samples.load(std::memory_order_relaxed);
+      const uint64_t changes = entry->diag_out_changes.load(std::memory_order_relaxed);
+      const uint64_t skipped = entry->diag_skipped.load(std::memory_order_relaxed);
+      const uint64_t frames = entry->frames.load(std::memory_order_relaxed);
+      const double in_sq = entry->diag_in_sq.load(std::memory_order_relaxed);
+      const double out_sq = entry->diag_out_sq.load(std::memory_order_relaxed);
+      const uint64_t window_frames = frames - entry->diag_prev_frames;
+      const double denom = window_frames ? static_cast<double>(window_frames) : 1.0;
+      logf("NAM diag sha256=%.16s slot=%zu generation=%lu tid=%ld cpu=%d window_blocks=%lu "
+           "in_zero_blocks=%lu in_value_zero_blocks=%lu in_nonzero_samples=%lu out_changes=%lu "
+           "skipped_model_frames=%lu "
+           "in_rms=%.3e in_peak=%.3e out_rms=%.3e out_peak=%.3e",
+           entry->hash.c_str(), entry->slot, (unsigned long)entry->generation,
+           entry->diag_tid.load(std::memory_order_relaxed),
+           entry->diag_cpu.load(std::memory_order_relaxed),
+           (unsigned long)(diag_blocks - entry->diag_prev_blocks),
+           (unsigned long)(zero_blocks - entry->diag_prev_zero),
+           (unsigned long)(value_zero - entry->diag_prev_value_zero),
+           (unsigned long)(nonzero - entry->diag_prev_nonzero),
+           (unsigned long)(changes - entry->diag_prev_changes),
+           (unsigned long)(skipped - entry->diag_prev_skipped),
+           std::sqrt((in_sq - entry->diag_prev_in_sq) / denom),
+           static_cast<double>(entry->diag_in_peak.exchange(0.0f, std::memory_order_relaxed)),
+           std::sqrt((out_sq - entry->diag_prev_out_sq) / denom),
+           static_cast<double>(entry->diag_out_peak.exchange(0.0f, std::memory_order_relaxed)));
+      entry->diag_prev_blocks = diag_blocks;
+      entry->diag_prev_zero = zero_blocks;
+      entry->diag_prev_value_zero = value_zero;
+      entry->diag_prev_nonzero = nonzero;
+      entry->diag_prev_changes = changes;
+      entry->diag_prev_skipped = skipped;
+      entry->diag_prev_frames = frames;
+      entry->diag_prev_in_sq = in_sq;
+      entry->diag_prev_out_sq = out_sq;
     }
   }
 }
@@ -659,6 +715,66 @@ inline void chain_original_process(void* self, void* a1, void* a2, void* a3,
   reinterpret_cast<process_t>(g_process_tramp.exec_buffer)(self, a1, a2, a3, a4, a5, a6, a7);
 }
 
+// TMP_NAM_PROFILE=2 helpers: sum of squares, peak and "every sample is +0.0".
+void diag_scan(const float* data, size_t frames, double* sq, float* peak, bool* zero,
+               uint32_t* nonzero) {
+  double s = 0.0;
+  float p = 0.0f;
+  bool z = true;
+  uint32_t n = 0;
+  for (size_t i = 0; i < frames; ++i) {
+    const float x = data[i];
+    uint32_t bits;
+    std::memcpy(&bits, &x, sizeof bits);
+    z = z && bits == 0;
+    n += x != 0.0f;
+    s += static_cast<double>(x) * x;
+    p = std::max(p, std::fabs(x));
+  }
+  *sq = s;
+  *peak = p;
+  *zero = z;
+  *nonzero = n;
+}
+
+void diag_record(NamEntry* entry, const float* out, size_t frames, double in_sq,
+                 float in_peak, bool in_zero, uint32_t in_nonzero) {
+  double out_sq;
+  float out_peak;
+  bool out_zero;
+  uint32_t out_nonzero;
+  diag_scan(out, frames, &out_sq, &out_peak, &out_zero, &out_nonzero);
+  // Count output samples whose bits differ from the previous sample: 0 means the
+  // output was one exact constant for the whole window.
+  uint64_t changes = 0;
+  float last = entry->diag_last_out;
+  for (size_t i = 0; i < frames; ++i) {
+    changes += std::memcmp(&last, &out[i], sizeof last) != 0;
+    last = out[i];
+  }
+  entry->diag_last_out = last;
+  constexpr auto relaxed = std::memory_order_relaxed;
+  const uint64_t blocks = entry->diag_blocks.load(relaxed) + 1;
+  entry->diag_blocks.store(blocks, relaxed);
+  if (in_zero) entry->diag_zero_in_blocks.store(entry->diag_zero_in_blocks.load(relaxed) + 1, relaxed);
+  if (!in_nonzero)
+    entry->diag_value_zero_in_blocks.store(entry->diag_value_zero_in_blocks.load(relaxed) + 1, relaxed);
+  entry->diag_nonzero_in_samples.store(entry->diag_nonzero_in_samples.load(relaxed) + in_nonzero, relaxed);
+  entry->diag_out_changes.store(entry->diag_out_changes.load(relaxed) + changes, relaxed);
+  entry->diag_skipped.store(entry->player->skipped_model_frames(), relaxed);
+  entry->diag_in_sq.store(entry->diag_in_sq.load(relaxed) + in_sq, relaxed);
+  entry->diag_out_sq.store(entry->diag_out_sq.load(relaxed) + out_sq, relaxed);
+  // A peak lost to a concurrent telemetry reset only shortens that window.
+  if (in_peak > entry->diag_in_peak.load(relaxed)) entry->diag_in_peak.store(in_peak, relaxed);
+  if (out_peak > entry->diag_out_peak.load(relaxed)) entry->diag_out_peak.store(out_peak, relaxed);
+  if ((blocks & 1023) == 1) {
+    entry->diag_tid.store(static_cast<long>(syscall(SYS_gettid)), relaxed);
+#ifdef __linux__
+    entry->diag_cpu.store(sched_getcpu(), relaxed);
+#endif
+  }
+}
+
 void process_handler(void* self, void* a1, void* a2, void* a3,
                      void* a4, void* a5, void* a6, void* a7) {
   const bool profile = g_profile.load(std::memory_order_relaxed);
@@ -685,6 +801,13 @@ void process_handler(void* self, void* a1, void* a2, void* a3,
     if (in != out) std::memmove(out, in, frames * sizeof(float));
     return;
   }
+  // Diagnostics read the input before process(), which may overwrite it in place.
+  const bool diag = profile && g_diag.load(std::memory_order_relaxed);
+  double diag_in_sq = 0.0;
+  float diag_in_peak = 0.0f;
+  bool diag_in_zero = false;
+  uint32_t diag_in_nonzero = 0;
+  if (diag) diag_scan(in, frames, &diag_in_sq, &diag_in_peak, &diag_in_zero, &diag_in_nonzero);
   try {
     entry->player->process(in, out, frames);
   } catch (...) {
@@ -705,6 +828,7 @@ void process_handler(void* self, void* a1, void* a2, void* a3,
   if (ns > static_cast<uint64_t>(frames) * 1000000000ULL / kEngineRate)
     entry->misses.fetch_add(1, std::memory_order_relaxed);
   entry->utilization.observe(ns, frames, kEngineRate);
+  if (diag) diag_record(entry, out, frames, diag_in_sq, diag_in_peak, diag_in_zero, diag_in_nonzero);
 }
 
 // S4 mitigation: convert silent VM-kernel mprotect-on-text failures into a
@@ -867,7 +991,10 @@ void install_trampolines() {
 // it makes the stub 100% passive during boot, so the engine boots stock-identical.
 void arm_worker() {
   const char* profile = std::getenv("TMP_NAM_PROFILE");
-  g_profile.store(profile && std::strcmp(profile, "1") == 0, std::memory_order_relaxed);
+  // "1" profiles the NAM call; "2" also logs per-entry levels and thread/CPU.
+  const bool diag = profile && std::strcmp(profile, "2") == 0;
+  g_profile.store(profile && (std::strcmp(profile, "1") == 0 || diag), std::memory_order_relaxed);
+  g_diag.store(diag, std::memory_order_relaxed);
   int delay_s = 15;  // seconds to let boot settle before touching anything
   if (const char* d = std::getenv("TMP_NAM_DISPATCH_ARM_DELAY"))
     if (d[0]) {
