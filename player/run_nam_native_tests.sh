@@ -150,7 +150,7 @@ run_dispatch_test() {
     "pinned upstream A2 max WaveNet example"
 }
 
-for required in test_nam_registry.cpp test_nam_loader.cpp test_nam_profile.cpp test_nam_trampoline.cpp test_nam_activation.cpp test_nam_reset_contract.cpp test_nam_dense8x8.cpp test_nam_player.cpp test_nam_model_config.cpp test_nam_dispatch_load.cpp; do
+for required in test_nam_registry.cpp test_nam_loader.cpp test_nam_profile.cpp test_nam_trampoline.cpp test_nam_activation.cpp test_nam_reset_contract.cpp test_nam_dense8x8.cpp test_nam_ring_buffer.cpp test_nam_fast_paths.cpp test_nam_player.cpp test_nam_zero_skip.cpp test_nam_model_config.cpp test_nam_dispatch_load.cpp; do
   [ -f "$SCRIPT_DIR/tests/$required" ] || { echo "Missing required native test: $SCRIPT_DIR/tests/$required" >&2; exit 1; }
 done
 run_simple_test "$SCRIPT_DIR/tests/test_nam_registry.cpp" "$BUILD_DIR/test_nam_registry"
@@ -160,7 +160,10 @@ run_simple_test "$SCRIPT_DIR/tests/test_nam_trampoline.cpp" "$BUILD_DIR/test_nam
 run_core_header_test "$SCRIPT_DIR/tests/test_nam_activation.cpp" "$BUILD_DIR/test_nam_activation"
 run_core_test "$SCRIPT_DIR/tests/test_nam_reset_contract.cpp" "$BUILD_DIR/test_nam_reset_contract"
 run_core_test "$SCRIPT_DIR/tests/test_nam_dense8x8.cpp" "$BUILD_DIR/test_nam_dense8x8"
+run_core_test "$SCRIPT_DIR/tests/test_nam_ring_buffer.cpp" "$BUILD_DIR/test_nam_ring_buffer"
+run_core_test "$SCRIPT_DIR/tests/test_nam_fast_paths.cpp" "$BUILD_DIR/test_nam_fast_paths"
 run_player_test "$SCRIPT_DIR/tests/test_nam_player.cpp" "$BUILD_DIR/test_nam_player"
+run_player_test "$SCRIPT_DIR/tests/test_nam_zero_skip.cpp" "$BUILD_DIR/test_nam_zero_skip"
 run_player_test "$SCRIPT_DIR/tests/test_nam_model_config.cpp" "$BUILD_DIR/test_nam_model_config"
 run_dispatch_test
 build_parity_cli
