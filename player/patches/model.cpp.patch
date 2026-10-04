@@ -900,7 +900,7 @@ index 5d0e9b3..0603b5a 100644
  };
  } // namespace nam
 diff --git a/NAM/wavenet/a2_fast.cpp b/NAM/wavenet/a2_fast.cpp
-index 276ed1a..0a80cfc 100644
+index 276ed1a..b4dbb51 100644
 --- a/NAM/wavenet/a2_fast.cpp
 +++ b/NAM/wavenet/a2_fast.cpp
 @@ -25,6 +25,10 @@
@@ -1125,8 +1125,530 @@ index 276ed1a..0a80cfc 100644
 
    // in_channels defaults to 1, must be 1
    if (config.value("in_channels", 1) != 1)
+@@ -901,3 +1048,521 @@ std::unique_ptr<ModelConfig> create_a2_fast_config(const nlohmann::json& config,
+ } // namespace nam
+
+ #endif // NAM_ENABLE_A2_FAST
++
++#if defined(NAM_ENABLE_A1_FAST) && defined(__aarch64__)
++
++  #include <algorithm>
++  #include <array>
++  #include <cmath>
++  #include <cstring>
++  #include <memory>
++  #include <stdexcept>
++  #include <string>
++  #include <vector>
++
++  #include <arm_neon.h>
++
++  #include "../activations.h"
++  #include "../dsp.h"
++  #include "a2_fast.h"
++
++namespace nam
++{
++namespace wavenet
++{
++namespace a1_fast
++{
++namespace
++{
++
++// =============================================================================
++// A1FastModel<CP1, CP2>
++//
++// The standard A1 WaveNet: two layer arrays, kernel 3, Tanh, not gated, no FiLM,
++// no head1x1, condition = input. Channel counts are padded to multiples of 4
++// (CP1/CP2) with zero weights and biases, so padded lanes stay exactly 0 and never
++// reach a head. Per layer, one fused pass computes
++//   z = conv(x) + conv_b + mixin * cond;  z = tanh(z);  head += z;  x += W1 z + b1
++// which is Layer::Process / LayerArray::ProcessInner / WaveNet::process with the
++// float operations in a different order (rounding-level differences only).
++// Per-frame arithmetic does not depend on the block size. AArch64 only; other
++// targets keep the generic WaveNet.
++// =============================================================================
++constexpr int kKernel = 3;
++
++int a1_next_pow2(const int v)
++{
++  int p = 1;
++  while (p < v)
++    p <<= 1;
++  return p;
++}
++
++struct A1Shape
++{
++  int c1 = 0, c2 = 0;
++  bool head_bias1 = false, head_bias2 = false;
++  std::vector<int> dilations1, dilations2;
++};
++
++template <int CP>
++struct Array
++{
++  struct Layer
++  {
++    int dilation = 1;
++    // Tap-major, column-major: weight (out i, in j) of tap k at k*CP*CP + j*CP + i.
++    // Tap k reads the input (kKernel - 1 - k) * dilation frames back, as Conv1D does.
++    std::array<float, kKernel * CP * CP> conv_w{};
++    std::array<float, CP> conv_b{};
++    std::array<float, CP> mix_w{};
++    std::array<float, CP * CP> l1_w{}; // column-major
++    std::array<float, CP> l1_b{};
++    // Pow2 ring of layer inputs (CP rows) + a max-buffer tail mirroring columns
++    // [0, mbs) so every tap read is contiguous.
++    std::vector<float> history;
++    int pow2 = 0, mask = 0, write_pos = 0;
++  };
++  int input = 1, in_p = 1, head = 1, head_p = 1;
++  bool head_bias = false;
++  std::vector<float> rech_w; // CP x in_p, column-major
++  std::vector<Layer> layers;
++  std::vector<float> head_w; // head_p x CP, column-major
++  std::vector<float> head_b; // head_p
++};
++
++template <int CP>
++void load_array(Array<CP>& a, const int channels, std::vector<float>::const_iterator& it,
++                const std::vector<float>::const_iterator end)
++{
++  auto take = [&]() {
++    if (it == end)
++      throw std::runtime_error("A1FastModel: weight stream too short");
++    return *(it++);
++  };
++  // Conv1x1 rechannel (input -> channels), no bias; Conv1x1::set_weights_ order.
++  for (int i = 0; i < channels; i++)
++    for (int j = 0; j < a.input; j++)
++      a.rech_w[static_cast<size_t>(j) * CP + i] = take();
++  for (auto& L : a.layers)
++  {
++    // Conv1D (channels -> channels, kernel 3, bias); Conv1D::set_weights_ order.
++    for (int i = 0; i < channels; i++)
++      for (int j = 0; j < channels; j++)
++        for (int k = 0; k < kKernel; k++)
++          L.conv_w[static_cast<size_t>(k) * CP * CP + static_cast<size_t>(j) * CP + i] = take();
++    for (int i = 0; i < channels; i++)
++      L.conv_b[i] = take();
++    // Input mixin (condition 1 -> channels), no bias.
++    for (int i = 0; i < channels; i++)
++      L.mix_w[i] = take();
++    // layer1x1 (channels -> channels), bias.
++    for (int i = 0; i < channels; i++)
++      for (int j = 0; j < channels; j++)
++        L.l1_w[static_cast<size_t>(j) * CP + i] = take();
++    for (int i = 0; i < channels; i++)
++      L.l1_b[i] = take();
++  }
++  // Head rechannel: Conv1D (channels -> head, kernel 1, optional bias).
++  for (int i = 0; i < a.head; i++)
++    for (int j = 0; j < channels; j++)
++      a.head_w[static_cast<size_t>(j) * a.head_p + i] = take();
++  if (a.head_bias)
++    for (int i = 0; i < a.head; i++)
++      a.head_b[i] = take();
++}
++
++template <int CP>
++void init_array(Array<CP>& a, const int input, const int in_p, const int head, const int head_p, const bool head_bias,
++                const std::vector<int>& dilations)
++{
++  a.input = input;
++  a.in_p = in_p;
++  a.head = head;
++  a.head_p = head_p;
++  a.head_bias = head_bias;
++  a.rech_w.assign(static_cast<size_t>(CP) * in_p, 0.0f);
++  a.head_w.assign(static_cast<size_t>(head_p) * CP, 0.0f);
++  a.head_b.assign(static_cast<size_t>(head_p), 0.0f);
++  a.layers.resize(dilations.size());
++  for (size_t i = 0; i < dilations.size(); i++)
++    a.layers[i].dilation = dilations[i];
++}
++
++template <int CP>
++void ring_write(typename Array<CP>::Layer& L, const float* src, const int num_frames, const int mbs)
++{
++  float* const hist = L.history.data();
++  const int wp = L.write_pos;
++  const int first = std::min(num_frames, L.pow2 - wp);
++  std::memcpy(hist + static_cast<size_t>(wp) * CP, src, static_cast<size_t>(first) * CP * sizeof(float));
++  if (first < num_frames)
++    std::memcpy(hist, src + static_cast<size_t>(first) * CP, static_cast<size_t>(num_frames - first) * CP * sizeof(float));
++  // Mirror only the written columns that fall inside [0, mbs).
++  auto mirror = [&](const int begin, int end) {
++    end = std::min(end, mbs);
++    if (begin < end)
++      std::memcpy(hist + static_cast<size_t>(L.pow2 + begin) * CP, hist + static_cast<size_t>(begin) * CP,
++                  static_cast<size_t>(end - begin) * CP * sizeof(float));
++  };
++  mirror(wp, wp + first);
++  mirror(0, num_frames - first);
++  L.write_pos = (wp + num_frames) & L.mask;
++}
++
++// fast_tanh (activations.h) on four lanes, same formula.
++inline float32x4_t fast_tanh_q(const float32x4_t x)
++{
++  const float32x4_t ax = vabsq_f32(x);
++  const float32x4_t x2 = vmulq_f32(x, x);
++  const float32x4_t a = vdupq_n_f32(2.45550750702956f);
++  const float32x4_t p = vfmaq_f32(vdupq_n_f32(0.893229853513558f), vdupq_n_f32(0.821226666969744f), ax);
++  const float32x4_t q = vfmaq_f32(vfmaq_f32(a, a, ax), p, x2);
++  const float32x4_t num = vmulq_f32(x, q);
++  const float32x4_t d = vdupq_n_f32(2.44506634652299f);
++  const float32x4_t inner = vabsq_f32(vfmaq_f32(x, vmulq_n_f32(x, 0.814642734961073f), ax));
++  const float32x4_t den = vfmaq_f32(d, vaddq_f32(d, x2), inner);
++  return vdivq_f32(num, den);
++}
++
++inline float32x4_t tanh_q(const float32x4_t x, const bool fast)
++{
++  if (fast)
++    return fast_tanh_q(x);
++  float v[4];
++  vst1q_f32(v, x);
++  for (float& e : v)
++    e = std::tanh(e);
++  return vld1q_f32(v);
++}
++
++// acc[t][q] += W[:, col] (Q registers) * lane Lane of x[t].
++template <int Q, int T, int Lane>
++inline void col_fma(float32x4_t (&acc)[T][Q], const float32x4_t (&x)[T], const float* wcol)
++{
++  for (int q = 0; q < Q; q++)
++  {
++    const float32x4_t w = vld1q_f32(wcol + 4 * q);
++    for (int t = 0; t < T; t++)
++      acc[t][q] = vfmaq_laneq_f32(acc[t][q], w, x[t], Lane);
++  }
++}
++
++template <int Q, int Lane>
++inline void col_fma1(float32x4_t (&y)[Q], const float32x4_t z, const float* wcol)
++{
++  for (int q = 0; q < Q; q++)
++    y[q] = vfmaq_laneq_f32(y[q], vld1q_f32(wcol + 4 * q), z, Lane);
++}
++
++// T frames starting at f of one layer, fully fused.
++template <int CP, int T>
++inline void layer_tile(const typename Array<CP>::Layer& L, const int* tap_base, const float* cond, float* head,
++                       float* x, const int f, const bool fast)
++{
++  constexpr int Q = CP / 4;
++  const float* hist = L.history.data();
++  float32x4_t acc[T][Q];
++  for (int t = 0; t < T; t++)
++    for (int q = 0; q < Q; q++)
++      acc[t][q] = vld1q_f32(L.conv_b.data() + 4 * q);
++  for (int k = 0; k < kKernel; k++)
++  {
++    const float* xk = hist + static_cast<size_t>(tap_base[k] + f) * CP;
++    const float* wk = L.conv_w.data() + static_cast<size_t>(k) * CP * CP;
++    for (int g = 0; g < Q; g++)
++    {
++      float32x4_t xg[T];
++      for (int t = 0; t < T; t++)
++        xg[t] = vld1q_f32(xk + static_cast<size_t>(t) * CP + 4 * g);
++      col_fma<Q, T, 0>(acc, xg, wk + static_cast<size_t>(4 * g + 0) * CP);
++      col_fma<Q, T, 1>(acc, xg, wk + static_cast<size_t>(4 * g + 1) * CP);
++      col_fma<Q, T, 2>(acc, xg, wk + static_cast<size_t>(4 * g + 2) * CP);
++      col_fma<Q, T, 3>(acc, xg, wk + static_cast<size_t>(4 * g + 3) * CP);
++    }
++  }
++  for (int t = 0; t < T; t++)
++  {
++    const float c = cond[f + t];
++    float32x4_t z[Q];
++    for (int q = 0; q < Q; q++)
++      z[q] = tanh_q(vfmaq_n_f32(acc[t][q], vld1q_f32(L.mix_w.data() + 4 * q), c), fast);
++    float* h = head + static_cast<size_t>(f + t) * CP;
++    float* xo = x + static_cast<size_t>(f + t) * CP;
++    float32x4_t y[Q];
++    for (int q = 0; q < Q; q++)
++    {
++      vst1q_f32(h + 4 * q, vaddq_f32(vld1q_f32(h + 4 * q), z[q]));
++      y[q] = vaddq_f32(vld1q_f32(xo + 4 * q), vld1q_f32(L.l1_b.data() + 4 * q));
++    }
++    for (int g = 0; g < Q; g++)
++    {
++      col_fma1<Q, 0>(y, z[g], L.l1_w.data() + static_cast<size_t>(4 * g + 0) * CP);
++      col_fma1<Q, 1>(y, z[g], L.l1_w.data() + static_cast<size_t>(4 * g + 1) * CP);
++      col_fma1<Q, 2>(y, z[g], L.l1_w.data() + static_cast<size_t>(4 * g + 2) * CP);
++      col_fma1<Q, 3>(y, z[g], L.l1_w.data() + static_cast<size_t>(4 * g + 3) * CP);
++    }
++    for (int q = 0; q < Q; q++)
++      vst1q_f32(xo + 4 * q, y[q]);
++  }
++}
++
++template <int CP>
++void layer_forward(const typename Array<CP>::Layer& L, const int* tap_base, const float* cond, float* head, float* x,
++                   const int num_frames, const bool fast)
++{
++  int f = 0;
++  for (; f + 4 <= num_frames; f += 4)
++    layer_tile<CP, 4>(L, tap_base, cond, head, x, f, fast);
++  for (; f < num_frames; f++)
++    layer_tile<CP, 1>(L, tap_base, cond, head, x, f, fast);
++}
++
++// y[f] (RP rows, RP % 4 == 0) = W (RP x CPI, column-major) * x[f] (CPI rows), + bias.
++template <int RP, int CPI>
++void gemv_frames(const float* W, const float* bias, const float* x, float* y, const int num_frames)
++{
++  constexpr int R = RP / 4;
++  for (int f = 0; f < num_frames; f++)
++  {
++    const float* xf = x + static_cast<size_t>(f) * CPI;
++    float32x4_t acc[R];
++    for (int r = 0; r < R; r++)
++      acc[r] = bias ? vld1q_f32(bias + 4 * r) : vdupq_n_f32(0.0f);
++    for (int j = 0; j < CPI; j++)
++      for (int r = 0; r < R; r++)
++        acc[r] = vfmaq_n_f32(acc[r], vld1q_f32(W + static_cast<size_t>(j) * RP + 4 * r), xf[j]);
++    for (int r = 0; r < R; r++)
++      vst1q_f32(y + static_cast<size_t>(f) * RP + 4 * r, acc[r]);
++  }
++}
++
++template <int CP1, int CP2>
++class A1FastModel : public DSP
++{
++public:
++  A1FastModel(const A1Shape& shape, const std::vector<float>& weights, const double expected_sample_rate)
++  : DSP(/*in_channels=*/1, /*out_channels=*/1, expected_sample_rate)
++  , _fast_tanh(nam::activations::Activation::using_fast_tanh)
++  {
++    init_array(_a1, 1, 1, shape.c2, CP2, shape.head_bias1, shape.dilations1);
++    init_array(_a2, shape.c1, CP1, 1, 1, shape.head_bias2, shape.dilations2);
++    auto it = weights.cbegin();
++    load_array(_a1, shape.c1, it, weights.cend());
++    load_array(_a2, shape.c2, it, weights.cend());
++    if (it == weights.cend())
++      throw std::runtime_error("A1FastModel: weight stream too short");
++    _head_scale = *(it++); // like WaveNet::set_weights_, the last value is head_scale
++    if (it != weights.cend())
++      throw std::runtime_error("A1FastModel: weight stream too long");
++    long rf = 1;
++    for (const auto& L : _a1.layers)
++      rf += static_cast<long>(kKernel - 1) * L.dilation;
++    for (const auto& L : _a2.layers)
++      rf += static_cast<long>(kKernel - 1) * L.dilation;
++    _receptive_field = static_cast<int>(rf);
++  }
++
++  void process(NAM_SAMPLE** input, NAM_SAMPLE** output, int num_frames) override
++  {
++    if (num_frames > GetMaxBufferSize())
++      SetMaxBufferSize(num_frames);
++    const NAM_SAMPLE* in0 = input[0];
++    float* cond = _cond.data();
++    for (int f = 0; f < num_frames; f++)
++    {
++      cond[f] = static_cast<float>(in0[f]);
++      for (int c = 0; c < CP1; c++)
++        _x1[static_cast<size_t>(f) * CP1 + c] = _a1.rech_w[c] * cond[f];
++    }
++    std::fill_n(_h1.data(), static_cast<size_t>(num_frames) * CP1, 0.0f);
++    run_array(_a1, _x1.data(), _h1.data(), num_frames);
++    // LA1 head rechannel -> LA2's starting head sum; LA1 output -> LA2 rechannel.
++    gemv_frames<CP2, CP1>(_a1.head_w.data(), _a1.head_bias ? _a1.head_b.data() : nullptr, _h1.data(), _h2.data(),
++                          num_frames);
++    gemv_frames<CP2, CP1>(_a2.rech_w.data(), nullptr, _x1.data(), _x2.data(), num_frames);
++    run_array(_a2, _x2.data(), _h2.data(), num_frames);
++    // LA2 head rechannel (CP2 -> 1) and head_scale.
++    const float b = _a2.head_bias ? _a2.head_b[0] : 0.0f;
++    for (int f = 0; f < num_frames; f++)
++    {
++      const float* h = _h2.data() + static_cast<size_t>(f) * CP2;
++      float y = b;
++      for (int j = 0; j < CP2; j++)
++        y += _a2.head_w[j] * h[j];
++      output[0][f] = static_cast<NAM_SAMPLE>(_head_scale * y);
++    }
++  }
++
++  long ZeroInputSettleSamples() override { return _receptive_field; }
++
++protected:
++  void SetMaxBufferSize(int maxBufferSize) override
++  {
++    DSP::SetMaxBufferSize(maxBufferSize);
++    const size_t mbs = static_cast<size_t>(maxBufferSize);
++    _cond.assign(mbs, 0.0f);
++    _x1.assign(mbs * CP1, 0.0f);
++    _h1.assign(mbs * CP1, 0.0f);
++    _x2.assign(mbs * CP2, 0.0f);
++    _h2.assign(mbs * CP2, 0.0f);
++    reset_rings(_a1, maxBufferSize);
++    reset_rings(_a2, maxBufferSize);
++  }
++
++  int PrewarmSamples() override { return _receptive_field; }
++
++private:
++  template <int CP>
++  static void reset_rings(Array<CP>& a, const int mbs)
++  {
++    for (auto& L : a.layers)
++    {
++      const int lookback = (kKernel - 1) * L.dilation;
++      L.pow2 = a1_next_pow2(lookback + mbs);
++      L.mask = L.pow2 - 1;
++      L.history.assign(static_cast<size_t>(CP) * (L.pow2 + mbs), 0.0f);
++      L.write_pos = lookback;
++    }
++  }
++
++  template <int CP>
++  void run_array(Array<CP>& a, float* x, float* head, const int num_frames)
++  {
++    const int mbs = GetMaxBufferSize();
++    for (auto& L : a.layers)
++    {
++      ring_write<CP>(L, x, num_frames, mbs);
++      int tap_base[kKernel];
++      for (int k = 0; k < kKernel; k++)
++        tap_base[k] = (L.write_pos - num_frames - (kKernel - 1 - k) * L.dilation) & L.mask;
++      layer_forward<CP>(L, tap_base, _cond.data(), head, x, num_frames, _fast_tanh);
++    }
++  }
++
++  Array<CP1> _a1;
++  Array<CP2> _a2;
++  float _head_scale = 0.0f;
++  bool _fast_tanh = true;
++  int _receptive_field = 0;
++  std::vector<float> _cond, _x1, _h1, _x2, _h2;
++};
++
++struct A1FastConfig : public ModelConfig
++{
++  A1Shape shape;
++
++  std::unique_ptr<DSP> create(std::vector<float> weights, double sampleRate) override
++  {
++    const int c1 = shape.c1, c2 = shape.c2;
++    if (c1 == 16 && c2 == 8)
++      return std::make_unique<A1FastModel<16, 8>>(shape, weights, sampleRate);
++    if (c1 == 12 && c2 == 6)
++      return std::make_unique<A1FastModel<12, 8>>(shape, weights, sampleRate);
++    if (c1 == 8 && c2 == 4)
++      return std::make_unique<A1FastModel<8, 4>>(shape, weights, sampleRate);
++    if (c1 == 4 && c2 == 2)
++      return std::make_unique<A1FastModel<4, 4>>(shape, weights, sampleRate);
++    throw std::runtime_error("A1FastConfig: unsupported channels");
++  }
++};
++
++bool read_dilations(const nlohmann::json& la, std::vector<int>* out)
++{
++  auto it = la.find("dilations");
++  if (it == la.end() || !it->is_array() || it->empty())
++    return false;
++  for (const auto& d : *it)
++  {
++    if (!d.is_number_integer())
++      return false;
++    const long v = d.get<long>();
++    if (v < 1 || v > (1 << 20))
++      return false;
++    out->push_back(static_cast<int>(v));
++  }
++  return true;
++}
++
++// Strict: only the plain A1 layout (exactly these keys, so every generic default applies).
++bool parse_a1(const nlohmann::json& config, A1Shape* s)
++{
++  if (!config.is_object())
++    return false;
++  for (auto it = config.begin(); it != config.end(); ++it)
++    if (it.key() != "layers" && it.key() != "head" && it.key() != "head_scale")
++      return false;
++  auto head_it = config.find("head");
++  if (head_it != config.end() && !head_it->is_null())
++    return false;
++  auto hs_it = config.find("head_scale");
++  if (hs_it == config.end() || !hs_it->is_number())
++    return false;
++  auto layers_it = config.find("layers");
++  if (layers_it == config.end() || !layers_it->is_array() || layers_it->size() != 2)
++    return false;
++  static const char* kKeys[] = {"activation", "channels", "condition_size", "dilations", "gated",
++                                "head_bias", "head_size", "input_size", "kernel_size"};
++  int channels[2], input[2], head[2];
++  bool head_bias[2];
++  for (int a = 0; a < 2; a++)
++  {
++    const auto& la = (*layers_it)[a];
++    if (!la.is_object() || la.size() != sizeof(kKeys) / sizeof(kKeys[0]))
++      return false;
++    for (const char* key : kKeys)
++      if (la.find(key) == la.end())
++        return false;
++    const auto& act = la.at("activation");
++    if (!act.is_string() || act.get<std::string>() != "Tanh")
++      return false;
++    if (!la.at("gated").is_boolean() || la.at("gated").get<bool>())
++      return false;
++    if (!la.at("head_bias").is_boolean())
++      return false;
++    for (const char* key : {"channels", "condition_size", "head_size", "input_size", "kernel_size"})
++      if (!la.at(key).is_number_integer())
++        return false;
++    if (la.at("kernel_size").get<int>() != kKernel || la.at("condition_size").get<int>() != 1)
++      return false;
++    channels[a] = la.at("channels").get<int>();
++    input[a] = la.at("input_size").get<int>();
++    head[a] = la.at("head_size").get<int>();
++    head_bias[a] = la.at("head_bias").get<bool>();
++    if (!read_dilations(la, a == 0 ? &s->dilations1 : &s->dilations2))
++      return false;
++  }
++  if (input[0] != 1 || head[0] != channels[1] || input[1] != channels[0] || head[1] != 1)
++    return false;
++  const int c1 = channels[0], c2 = channels[1];
++  if (!((c1 == 16 && c2 == 8) || (c1 == 12 && c2 == 6) || (c1 == 8 && c2 == 4) || (c1 == 4 && c2 == 2)))
++    return false;
++  s->c1 = c1;
++  s->c2 = c2;
++  s->head_bias1 = head_bias[0];
++  s->head_bias2 = head_bias[1];
++  return true;
++}
++
++} // namespace
++
++bool is_a1_shape(const nlohmann::json& config)
++{
++  A1Shape shape;
++  return parse_a1(config, &shape);
++}
++
++std::unique_ptr<ModelConfig> create_a1_fast_config(const nlohmann::json& config, double sampleRate)
++{
++  (void)sampleRate;
++  auto out = std::make_unique<A1FastConfig>();
++  if (!parse_a1(config, &out->shape))
++    throw std::runtime_error("create_a1_fast_config: config does not match the A1 shape");
++  return out;
++}
++
++} // namespace a1_fast
++} // namespace wavenet
++} // namespace nam
++
++#endif // NAM_ENABLE_A1_FAST && __aarch64__
 diff --git a/NAM/wavenet/a2_fast.h b/NAM/wavenet/a2_fast.h
-index 03cf439..ed36bf6 100644
+index 03cf439..fdb61e5 100644
 --- a/NAM/wavenet/a2_fast.h
 +++ b/NAM/wavenet/a2_fast.h
 @@ -31,7 +31,7 @@ namespace a2_fast
@@ -1138,10 +1660,52 @@ index 03cf439..ed36bf6 100644
  constexpr float kHeadScale = 0.01f;
  /// \brief LeakyReLU negative-slope used by every layer.
  constexpr float kLeakySlope = 0.01f;
+@@ -59,3 +59,32 @@ std::unique_ptr<ModelConfig> create_a2_fast_config(const nlohmann::json& config,
+ } // namespace nam
+
+ #endif // NAM_ENABLE_A2_FAST
++
++// Fused A1 WaveNet (two layer arrays, kernel 3, Tanh, not gated; 16/8, 12/6, 8/4 or
++// 4/2 channels; any dilations). AArch64 only: other targets keep the generic WaveNet.
++#if defined(NAM_ENABLE_A1_FAST) && defined(__aarch64__)
++
++  #include <memory>
++
++  #include "../model_config.h"
++  #include "json.hpp"
++
++namespace nam
++{
++namespace wavenet
++{
++namespace a1_fast
++{
++
++/// \brief Strict detector for the plain A1 layout handled by the fast path.
++bool is_a1_shape(const nlohmann::json& config);
++
++/// \brief Build a ModelConfig that instantiates the A1 fast path.
++/// \pre is_a1_shape(config) returned true.
++std::unique_ptr<ModelConfig> create_a1_fast_config(const nlohmann::json& config, double sampleRate);
++
++} // namespace a1_fast
++} // namespace wavenet
++} // namespace nam
++
++#endif // NAM_ENABLE_A1_FAST && __aarch64__
 diff --git a/NAM/wavenet/model.cpp b/NAM/wavenet/model.cpp
-index eaf74ad..f49f513 100644
+index eaf74ad..96749eb 100644
 --- a/NAM/wavenet/model.cpp
 +++ b/NAM/wavenet/model.cpp
+@@ -12,7 +12,7 @@
+ #include "slimmable.h"
+ #include "model.h"
+
+-#if defined(NAM_ENABLE_A2_FAST)
++#if defined(NAM_ENABLE_A2_FAST) || defined(NAM_ENABLE_A1_FAST)
+   #include "a2_fast.h"
+ #endif
+
 @@ -427,8 +427,9 @@ long nam::wavenet::detail::LayerArray::get_receptive_field() const
  void nam::wavenet::detail::LayerArray::Process(const Eigen::MatrixXf& layer_inputs, const Eigen::MatrixXf& condition,
                                                 const int num_frames)
@@ -1168,6 +1732,17 @@ index eaf74ad..f49f513 100644
  void nam::wavenet::WaveNet::_process_condition(const int num_frames)
  {
    if (this->_condition_dsp == nullptr)
+@@ -1226,6 +1234,10 @@ std::unique_ptr<nam::ModelConfig> nam::wavenet::create_config(const nlohmann::js
+   if (int a2_channels = 0; nam::wavenet::a2_fast::is_a2_shape(config, &a2_channels))
+     return nam::wavenet::a2_fast::create_a2_fast_config(config, sampleRate);
+ #endif
++#if defined(NAM_ENABLE_A1_FAST) && defined(__aarch64__)
++  if (nam::wavenet::a1_fast::is_a1_shape(config))
++    return nam::wavenet::a1_fast::create_a1_fast_config(config, sampleRate);
++#endif
+
+   auto wc = std::make_unique<WaveNetConfig>();
+   auto parsed = parse_config_json(config, sampleRate);
 diff --git a/NAM/wavenet/model.h b/NAM/wavenet/model.h
 index 968baf8..508f909 100644
 --- a/NAM/wavenet/model.h
