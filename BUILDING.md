@@ -10,7 +10,7 @@ bun install
 bun run tauri dev                  # real unit over USB
 TMP_NAM_SIM=1 bun run tauri dev    # simulated unit
 bun run dev                        # UI only, in a browser, against the in-page mock (src/lib/mock.ts)
-bun run tauri build                # .app + .dmg (bundles device/ as a resource)
+bun run tauri build                # .app/.dmg on macOS, .deb/.rpm/.AppImage on Linux (bundles device/)
 ```
 
 Frontend checks: `bun run typecheck`, `bun run lint`, `bun run test`. Rust:
