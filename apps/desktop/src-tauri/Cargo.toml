@@ -22,7 +22,7 @@ ureq = { version = "2", features = ["json"] }
 # PKCE verifier/challenge, model hashes, base64 file push over the console.
 sha2.workspace = true
 base64 = "0.22"
-getrandom = "0.2"
+getrandom = "0.4"
 urlencoding = "2"
 url = "2"
 # Raw termios on the unit's CDC-ACM console (/dev/cu.usbmodem*).
