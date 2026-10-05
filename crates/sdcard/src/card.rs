@@ -1,10 +1,11 @@
 //! Physical cards: detection, safety checks, partitioning, writing and readback.
 //!
-//! Acceptance rules: a whole, writable, removable, physical
-//! disk on a USB (macOS) or USB/MMC (Linux) bus, never the startup disk and never
-//! Fender-exposed storage. On macOS the builder runs as the user and `open` gets a
-//! read/write descriptor on the raw disk from authopen(1) behind an administrator
-//! prompt; on Linux the desktop app runs the whole helper as root through pkexec.
+//! Acceptance rules: a whole, writable, removable, physical disk in a USB reader or
+//! the built-in SD slot (macOS) or on a USB/MMC bus (Linux), never the startup disk
+//! and never Fender-exposed storage. On macOS the builder runs as the user and
+//! `open` gets a read/write descriptor on the raw disk from authopen(1) behind an
+//! administrator prompt; on Linux the desktop app runs the whole helper as root
+//! through pkexec.
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -67,6 +68,13 @@ pub fn normalize_macos_device(device: &str) -> Result<(String, String)> {
     Ok((format!("/dev/disk{digits}"), format!("/dev/rdisk{digits}")))
 }
 
+/// USB card readers, and the built-in SDXC slot of recent Macs, which reports
+/// `Secure Digital` with an Internal location. The Mac's own drives report other
+/// buses (`Apple Fabric`, `PCI-Express`, `SATA`) and are not removable media.
+fn is_macos_card_bus(protocol: &str) -> bool {
+    matches!(protocol, "USB" | "Secure Digital")
+}
+
 fn macos_device_info(device: &str) -> Result<DeviceInfo> {
     let (logical, raw) = normalize_macos_device(device)?;
     let info = plist(&["info", "-plist", &logical])?;
@@ -77,23 +85,20 @@ fn macos_device_info(device: &str) -> Result<DeviceInfo> {
             .unwrap_or("")
             .to_string()
     };
-    if [
-        "WholeDisk",
-        "Removable",
-        "RemovableMedia",
-        "Writable",
-        "WritableMedia",
-    ]
-    .iter()
-    .any(|k| !flag(k))
+    if ["WholeDisk", "Removable", "RemovableMedia"]
+        .iter()
+        .any(|k| !flag(k))
     {
-        return bail("target is not a writable whole removable disk");
+        return bail("target is not a whole removable disk");
+    }
+    if !flag("Writable") || !flag("WritableMedia") {
+        return bail("SD card is write-protected; slide its lock switch up");
     }
     if flag("SystemImage") || text("VirtualOrPhysical") != "Physical" {
         return bail("target is not physical removable media");
     }
-    if text("BusProtocol") != "USB" {
-        return bail("target protocol is not USB");
+    if !is_macos_card_bus(&text("BusProtocol")) {
+        return bail("target is not on a USB card reader or SD slot");
     }
     let root = plist(&["info", "-plist", "/"])?;
     if root.get("ParentWholeDisk").and_then(|v| v.as_string())
@@ -673,6 +678,15 @@ mod tests {
         );
         assert!(normalize_macos_device("/dev/disk4s1").is_err());
         assert!(normalize_macos_device("disk4").is_err());
+    }
+
+    #[test]
+    fn macos_card_buses() {
+        assert!(is_macos_card_bus("USB"));
+        assert!(is_macos_card_bus("Secure Digital"));
+        for internal in ["Apple Fabric", "PCI-Express", "SATA", "Thunderbolt", ""] {
+            assert!(!is_macos_card_bus(internal), "{internal}");
+        }
     }
 
     /// What authopen does with `-stdoutpipe`: one byte carrying the descriptor.
