@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "packageManager": "bun@1.3.14",
   "description": "Desktop app for the Tone Master Pro NAM SD card: manage NAM captures, sync Tone3000, build the bootable card",
   "scripts": {
     "dev": "vite",

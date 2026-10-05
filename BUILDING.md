@@ -2,7 +2,8 @@
 
 ## Desktop app (`apps/desktop`)
 
-Prerequisites: Rust (stable), [Bun](https://bun.sh), Xcode Command Line Tools.
+Prerequisites: Rust (stable), [Bun](https://bun.sh) 1.3.14 (`packageManager` in
+`apps/desktop/package.json`; see CONTRIBUTING.md), Xcode Command Line Tools.
 
 ```sh
 cd apps/desktop

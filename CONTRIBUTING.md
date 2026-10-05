@@ -13,7 +13,15 @@ Linux**; Windows is not supported.
 
 ## Build & test
 
-Requires stable Rust (pinned by `rust-toolchain.toml`) and [Bun](https://bun.sh). On Linux also:
+Requires stable Rust (pinned by `rust-toolchain.toml`) and [Bun](https://bun.sh) 1.3.14, the
+version pinned by `packageManager` in `apps/desktop/package.json` (newer Bun writes a
+`bun.lock` format Dependabot cannot read yet):
+
+```bash
+curl -fsSL https://bun.sh/install | bash -s "bun-v1.3.14"
+```
+
+On Linux also:
 
 ```bash
 sudo apt-get install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libudev-dev libxdo-dev

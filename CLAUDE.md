@@ -37,6 +37,9 @@ node apps/desktop/scripts/gen-tokens.mjs   # regenerate src/theme/tokens.css aft
 cargo run --release -p tmp-sdcard -- image <ToneMasterPro_v1_8_58.img> <new.img>
 ```
 
+- Bun is pinned to 1.3.14 (`packageManager` in `apps/desktop/package.json`, used by CI's
+  `setup-bun`): Bun 1.4+ writes `bun.lock` v2, which Dependabot cannot parse. Never commit a
+  v2 lockfile.
 - Frontend lint is strict type-aware eslint with `noInlineConfig` (no disable comments) and
   `react-hooks/set-state-in-effect`: kick async loaders from effects with `defer()`
   (`src/lib/format.ts`), not a direct call.
