@@ -18,7 +18,7 @@ tauri-plugin-dialog = "2"
 serde.workspace = true
 serde_json.workspace = true
 # Tone3000 REST + OAuth token exchange (blocking; every call runs on a worker thread).
-ureq = { version = "2", features = ["json"] }
+ureq = { version = "3", features = ["json"] }
 # PKCE verifier/challenge, model hashes, base64 file push over the console.
 sha2.workspace = true
 base64 = "0.22"
