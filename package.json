@@ -1,6 +1,6 @@
 {
   "name": "tmp-nam",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Repository tooling (commitlint, release-please version). The app lives in apps/desktop.",

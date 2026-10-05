@@ -1,6 +1,6 @@
 {
   "name": "tmp-nam-companion",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Desktop app for the Tone Master Pro NAM SD card: manage NAM captures, sync Tone3000, build the bootable card",
