@@ -21,7 +21,7 @@ serde_json.workspace = true
 ureq = { version = "2", features = ["json"] }
 # PKCE verifier/challenge, model hashes, base64 file push over the console.
 sha2.workspace = true
-base64 = "0.22"
+base64 = "0.23"
 getrandom = "0.2"
 urlencoding = "2"
 url = "2"

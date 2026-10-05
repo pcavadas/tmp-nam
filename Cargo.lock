@@ -3659,7 +3659,7 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 name = "tmp-nam-companion"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "getrandom 0.2.17",
  "hidapi",
  "libc",
