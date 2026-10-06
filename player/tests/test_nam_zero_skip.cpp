@@ -13,7 +13,6 @@
 #include "NAM/activations.h"
 #include "NAM/get_dsp.h"
 #include "NAM/slimmable.h"
-#include "json.hpp"
 #include "nam_test_models.h"
 
 namespace {
@@ -32,8 +31,8 @@ std::vector<float> signal_with_gaps() {
 }
 
 // Reference: the same preparation Player::prepare performs, then every block.
-std::vector<float> reference(const json& model, double size, const std::vector<float>& input, const int* blocks,
-                             size_t nblocks) {
+template <size_t N>
+std::vector<float> reference(const json& model, double size, const std::vector<float>& input, const int (&blocks)[N]) {
   nam::DspLoadOptions options;
   options.prewarm = false;
   auto dsp = nam::get_dsp(model, options);
@@ -44,16 +43,7 @@ std::vector<float> reference(const json& model, double size, const std::vector<f
   float* zi[1] = {&zero_in};
   float* zo[1] = {&zero_out};
   dsp->process(zi, zo, 0);
-  std::vector<float> in = input, out(input.size());
-  size_t pos = 0, b = 0;
-  while (pos < in.size()) {
-    const int n = static_cast<int>(std::min<size_t>(static_cast<size_t>(blocks[b++ % nblocks]), in.size() - pos));
-    float* ip[1] = {in.data() + pos};
-    float* op[1] = {out.data() + pos};
-    dsp->process(ip, op, n);
-    pos += static_cast<size_t>(n);
-  }
-  return out;
+  return nam_test::process_blocks(*dsp, input, blocks);
 }
 
 void check(const std::string& label, const json& model, double size, bool expect_skip) {
@@ -69,11 +59,11 @@ void check(const std::string& label, const json& model, double size, bool expect
   std::vector<float> out(input.size());
   size_t pos = 0, b = 0;
   while (pos < input.size()) {
-    const size_t n = std::min<size_t>(static_cast<size_t>(kBlocks[b++ % 8]), input.size() - pos);
+    const size_t n = std::min<size_t>(static_cast<size_t>(kBlocks[b++ % std::size(kBlocks)]), input.size() - pos);
     player.process(input.data() + pos, out.data() + pos, n);
     pos += n;
   }
-  const auto want = reference(model, size, input, kBlocks, 8);
+  const auto want = reference(model, size, input, kBlocks);
   assert(std::memcmp(out.data(), want.data(), out.size() * sizeof(float)) == 0);
   std::cout << label << ": bit-identical, skipped " << player.skipped_model_frames() << " model frames\n";
   assert(expect_skip ? player.skipped_model_frames() > 0 : player.skipped_model_frames() == 0);

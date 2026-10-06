@@ -20,14 +20,13 @@ Exit status 1 if any zero or attenuation run is found.
 """
 import argparse
 import json
+import struct
 import sys
 
 import numpy as np
 
 
 def read_wav(path):
-    import wave
-    import struct
     with open(path, "rb") as f:
         data = f.read()
     i, fmt, channels, rate = 12, None, 0, 0
@@ -41,7 +40,7 @@ def read_wav(path):
             if fmt not in (3, 65534):
                 raise SystemExit("expected float WAV")
             x = np.frombuffer(body, "<f4")
-            return x.reshape(-1, channels).astype(np.float64), rate
+            return x.reshape(-1, channels), rate
         i += 8 + n + (n & 1)
     raise SystemExit("no data chunk")
 
@@ -49,16 +48,13 @@ def read_wav(path):
 def rms_1ms(x, rate):
     hop = rate // 1000
     n = len(x) // hop
-    return np.sqrt(np.mean(x[: n * hop].reshape(n, hop, -1) ** 2, axis=1))  # (ms, ch)
+    return np.sqrt(np.mean(np.square(x[: n * hop].reshape(n, hop, -1), dtype=np.float64), axis=1))  # (ms, ch)
 
 
 def runs(mask, min_len):
-    count, cur = 0, 0
-    for v in mask:
-        cur = cur + 1 if v else 0
-        if cur == min_len:
-            count += 1
-    return count
+    """Number of runs of True at least min_len long."""
+    edges = np.diff(np.r_[0, mask.astype(np.int8), 0])
+    return int(np.count_nonzero(np.flatnonzero(edges == -1) - np.flatnonzero(edges == 1) >= min_len))
 
 
 def db(v):
@@ -77,7 +73,7 @@ def main():
     wet = np.sqrt((env[:, 0] ** 2 + env[:, 1] ** 2) / 2)
     dry = env[:, 2]
     hop = rate // 1000
-    rows, bad = [], 0
+    rows = []
     for k, e in enumerate(sw):
         # The capture begins before the stream carries audio; skip its first 200 ms.
         start = max(e["frame"] // hop, 200 if k == 0 else 0)
@@ -95,14 +91,14 @@ def main():
         atten_runs = runs(atten, 2)
         settled = slice(start + 50, end)
         ratio = db(wet[settled]) - db(dry[settled])
-        dwell = audio[(start + 200) * hop:end * hop, :2].mean(axis=1)
-        spec = np.abs(np.fft.rfft(dwell * np.hanning(len(dwell)))) if len(dwell) > 256 else np.zeros(2)
-        freqs = np.fft.rfftfreq(len(dwell), 1 / rate) if len(dwell) > 256 else np.zeros(2)
-        centroid = float((spec * freqs).sum() / max(spec.sum(), 1e-12))
+        dwell = audio[(start + 200) * hop:end * hop, :2].mean(axis=1, dtype=np.float64)
+        centroid = 0.0
+        if len(dwell) > 256:
+            spec = np.abs(np.fft.rfft(dwell * np.hanning(len(dwell))))
+            centroid = float((spec * np.fft.rfftfreq(len(dwell), 1 / rate)).sum() / max(spec.sum(), 1e-12))
         row = {"slot": e["slot"], "from": sw[k - 1]["slot"] if k else None, "zero_runs": zero_runs,
                "atten_runs": atten_runs, "min_wet_db": float(ratio.min()) if len(ratio) else None,
                "wet_db": float(db(np.sqrt(np.mean(wet[start + 200:end] ** 2)))), "centroid_hz": centroid}
-        bad += zero_runs + atten_runs
         rows.append(row)
         print("%-9s -> %-3s zero_runs=%d atten_runs=%d min_wet_rel=%6.1f dB  level=%6.1f dB  centroid=%5.0f Hz" % (
             "start" if row["from"] is None else row["from"], row["slot"], zero_runs, atten_runs,
@@ -114,7 +110,7 @@ def main():
         summary["switches"], summary["zero_runs"], summary["atten_runs"], summary["min_wet_db"]))
     if args.json_out:
         json.dump(summary, open(args.json_out, "w"), indent=2)
-    return 1 if bad else 0
+    return 1 if summary["zero_runs"] + summary["atten_runs"] else 0
 
 
 if __name__ == "__main__":

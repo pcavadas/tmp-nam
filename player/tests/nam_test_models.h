@@ -2,10 +2,13 @@
 // A2 3/8-channel SlimmableContainer) with seeded random weights, so no capture is tracked.
 #pragma once
 
+#include <algorithm>
+#include <iterator>
 #include <random>
 #include <string>
 #include <vector>
 
+#include "NAM/dsp.h"
 #include "json.hpp"
 
 namespace nam_test {
@@ -71,6 +74,20 @@ inline json a2_model(int channels, unsigned seed) {
   json config = {{"layers", {layer}}, {"head", nullptr}, {"head_scale", 0.005}};
   return json{{"version", "0.7.0"}, {"architecture", "WaveNet"}, {"config", config},
               {"weights", random_weights(count, 0.1f, seed)}, {"sample_rate", 48000}};
+}
+
+// Runs an already prepared DSP over `in`, cycling through `blocks` for the block sizes.
+template <size_t N>
+inline std::vector<float> process_blocks(nam::DSP& dsp, std::vector<float> in, const int (&blocks)[N]) {
+  std::vector<float> out(in.size());
+  for (size_t pos = 0, b = 0; pos < in.size(); b++) {
+    const int n = static_cast<int>(std::min<size_t>(static_cast<size_t>(blocks[b % N]), in.size() - pos));
+    float* ip[1] = {in.data() + pos};
+    float* op[1] = {out.data() + pos};
+    dsp.process(ip, op, n);
+    pos += static_cast<size_t>(n);
+  }
+  return out;
 }
 
 // A2 SlimmableContainer: 3 channels up to size 0.5, 8 channels up to 1.

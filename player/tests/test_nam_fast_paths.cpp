@@ -14,7 +14,6 @@
 #include "NAM/slimmable.h"
 #include "NAM/wavenet/a2_fast.h"
 #include "NAM/wavenet/model.h"
-#include "json.hpp"
 #include "nam_test_models.h"
 
 namespace {
@@ -34,16 +33,7 @@ std::vector<float> test_signal(size_t n) {
 std::vector<float> run(nam::DSP& dsp, const std::vector<float>& input) {
   static const int kBlocks[] = {1, 7, 32, 35, 64, 13, 34, 256, 3, 32};
   dsp.ResetAndPrewarm(48000.0, 256);
-  std::vector<float> in = input, out(input.size());
-  size_t pos = 0, b = 0;
-  while (pos < in.size()) {
-    const int n = static_cast<int>(std::min<size_t>(kBlocks[b++ % 10], in.size() - pos));
-    float* ip[1] = {in.data() + pos};
-    float* op[1] = {out.data() + pos};
-    dsp.process(ip, op, n);
-    pos += static_cast<size_t>(n);
-  }
-  return out;
+  return nam_test::process_blocks(dsp, input, kBlocks);
 }
 
 void expect_close(const std::vector<float>& a, const std::vector<float>& b, const std::string& label) {

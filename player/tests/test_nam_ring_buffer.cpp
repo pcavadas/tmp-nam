@@ -26,8 +26,10 @@ int main() {
           input(c, f) = value(rng);
       rb.Write(input, n);
       const long first = static_cast<long>(history.size());
-      for (int f = 0; f < n; f++)
-        history.push_back({input(0, f), input(1, f), input(2, f)});
+      for (int f = 0; f < n; f++) {
+        history.emplace_back(kChannels);
+        for (int c = 0; c < kChannels; c++) history.back()[static_cast<size_t>(c)] = input(c, f);
+      }
       for (const long l : {0L, lookback / 2, lookback}) {
         auto got = rb.Read(n, l);
         for (int f = 0; f < n; f++) {
