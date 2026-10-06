@@ -83,6 +83,12 @@ NAM hook does not add another fade. By holding the stock IR load until the
 selected NAM is reset, prewarmed, activated, and published, the inactive bank
 cannot report success with a late NAM swap still pending.
 
+While a capture plays, Fender's own IR processing keeps running underneath it
+on the unity placeholder, output discarded. The firmware's IR load does not
+clear the processor's output ring, so a processor frozen during a capture would
+replay the previous IR's tail (a burst about 5 dB below playing level) when an
+ordinary IR replaces the capture.
+
 The player backports upstream Core lifecycle behavior from
 `d65cf2114e4a9e083292b235af1a24789d6fe128`,
 `e49c93e678549230d09efbb0beeb50511e387874`, and
@@ -170,12 +176,14 @@ with the trainer architectures and seeded random weights
 5. Enable `TMP_NAM_PROFILE=1` only for measurements. Compare p99.9 against the
    budget above and keep the profiler setting identical between captures.
 
-Failed replacements retain the prior ready player. A failed initial NAM load
-removes its empty registry slot and leaves the unity placeholder on Fender's
-path, producing explicit bypass rather than silence. The graph-load visitor
-converts the dispatcher's runtime error to load failure; the stock live
-string-edit path may only log the error and report success, an inherited
-firmware limitation. Ordinary WAV selection cancels pending NAM work and
+A failed NAM load (unreadable model, rejected `player.json` value, unavailable
+hook) unbinds that processor, including a capture it played before, and returns
+the stock placeholder result: the block runs the unity placeholder, an explicit
+bypass rather than silence, and the preset load itself succeeds. The dispatcher
+never throws from the IR load: the firmware builds the IR unit around that call,
+and an exception there leaves the unit half-built, so its pooled `IRProcessor`
+(four are shared by both preset banks) is never returned. `NAM load failed …
+unbound=1` in the log marks it. Ordinary WAV selection cancels pending NAM work and
 restores Fender IR processing. Stop using a capture if
 it produces a deadline miss, processing error, conversion underflow, corrupted
 audio, crash, or hang.
