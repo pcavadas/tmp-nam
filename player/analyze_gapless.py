@@ -78,7 +78,8 @@ def main():
         # The capture begins before the stream carries audio; skip its first 200 ms.
         start = max(e["frame"] // hop, 200 if k == 0 else 0)
         end = (sw[k + 1]["frame"] // hop) if k + 1 < len(sw) else len(wet)
-        if end - start < 100:
+        # The settled level and spectrum start 200 ms into the dwell; keep 100 ms of it.
+        if end - start < 300:
             continue
         seg = audio[start * hop:end * hop]
         zero = (seg[:, 0] == 0.0) & (seg[:, 1] == 0.0)
@@ -97,17 +98,19 @@ def main():
             spec = np.abs(np.fft.rfft(dwell * np.hanning(len(dwell))))
             centroid = float((spec * np.fft.rfftfreq(len(dwell), 1 / rate)).sum() / max(spec.sum(), 1e-12))
         row = {"slot": e["slot"], "from": sw[k - 1]["slot"] if k else None, "zero_runs": zero_runs,
-               "atten_runs": atten_runs, "min_wet_db": float(ratio.min()) if len(ratio) else None,
+               "atten_runs": atten_runs, "min_wet_db": float(ratio.min()),
                "wet_db": float(db(np.sqrt(np.mean(wet[start + 200:end] ** 2)))), "centroid_hz": centroid}
         rows.append(row)
         print("%-9s -> %-3s zero_runs=%d atten_runs=%d min_wet_rel=%6.1f dB  level=%6.1f dB  centroid=%5.0f Hz" % (
             "start" if row["from"] is None else row["from"], row["slot"], zero_runs, atten_runs,
-            row["min_wet_db"] if row["min_wet_db"] is not None else float("nan"), row["wet_db"], centroid))
-    summary = {"switches": len(rows) - 1, "zero_runs": sum(r["zero_runs"] for r in rows),
+            row["min_wet_db"], row["wet_db"], centroid))
+    if not rows:
+        raise SystemExit("no dwell of at least 300 ms to analyze")
+    summary = {"switches": len(sw) - 1, "dwells": len(rows), "zero_runs": sum(r["zero_runs"] for r in rows),
                "atten_runs": sum(r["atten_runs"] for r in rows),
-               "min_wet_db": min(r["min_wet_db"] for r in rows if r["min_wet_db"] is not None), "rows": rows}
-    print("TOTAL switches=%d zero_runs=%d atten_runs=%d min_wet_rel=%.1f dB" % (
-        summary["switches"], summary["zero_runs"], summary["atten_runs"], summary["min_wet_db"]))
+               "min_wet_db": min(r["min_wet_db"] for r in rows), "rows": rows}
+    print("TOTAL switches=%d dwells=%d zero_runs=%d atten_runs=%d min_wet_rel=%.1f dB" % (
+        summary["switches"], summary["dwells"], summary["zero_runs"], summary["atten_runs"], summary["min_wet_db"]))
     if args.json_out:
         json.dump(summary, open(args.json_out, "w"), indent=2)
     return 1 if summary["zero_runs"] + summary["atten_runs"] else 0

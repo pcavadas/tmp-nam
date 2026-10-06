@@ -809,11 +809,14 @@ void process_handler(void* self, void* a1, void* a2, void* a3,
     if (in != out) std::memmove(out, in, frames * sizeof(float));
   }
   entry->src_underflows.store(entry->player->late_underflow_frames(), std::memory_order_relaxed);
+  const auto end = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+  // Diagnostics are recorded while this callback still owns the entry: their
+  // single-writer counters and the Player read must not race another callback.
+  if (diag) diag_record(entry, out, frames, diag_in);
   entry->processing.clear(std::memory_order_release);
   entry->frames.fetch_add(frames, std::memory_order_relaxed);
   entry->blocks.fetch_add(1, std::memory_order_relaxed);
   if (!profile) return;
-  const auto end = std::chrono::steady_clock::now();
   const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count() - diag_scan_ns;
   const auto ns = static_cast<uint64_t>(std::max<int64_t>(elapsed, 0));
   entry->time_ns.fetch_add(ns, std::memory_order_relaxed);
@@ -822,7 +825,6 @@ void process_handler(void* self, void* a1, void* a2, void* a3,
   if (ns > static_cast<uint64_t>(frames) * 1000000000ULL / kEngineRate)
     entry->misses.fetch_add(1, std::memory_order_relaxed);
   entry->utilization.observe(ns, frames, kEngineRate);
-  if (diag) diag_record(entry, out, frames, diag_in);
 }
 
 // S4 mitigation: convert silent VM-kernel mprotect-on-text failures into a
