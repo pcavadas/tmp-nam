@@ -30,7 +30,7 @@
       "source": "bin/nam_dispatch.so",
       "target": "usr/local/lib/nam_dispatch.so",
       "bytes": 2668208,
-      "sha256": "1ba52410796ebb39c13acbecd7d3f9af843b7999bf2fdd390ec722af60dc3293"
+      "sha256": "dd3cbc90e2292baf882da4011bc290dd0086dedd38eab679493f87f594d19f21"
     },
     "registry_helper": {
       "source": "helpers/register_nam_ir.py",
@@ -170,7 +170,7 @@
     "player/nam_registry.h": "64451b554072cd9aaf4e853723197d708aabfb1176661d5e85ca72c4c6edd42a",
     "player/nam_sha256.h": "028c31ff92dd56a5813be0727a344e009fa9c3c5b2e6ded9e77ffc4e3c3473d9",
     "player/patches/model.cpp.patch": "ada70ac1380c367babe5e973528b4de776433b8899b40e4d14d8a7e09125347d",
-    "player/stubs/nam_dispatch.cpp": "942e6219ee7bb9d9eb23d38dfd103dd04d17da33cfd3fe0cd8a73cbd16d616f2",
+    "player/stubs/nam_dispatch.cpp": "428a710d0e6bb18e3e80d03049546800e09fa1c00bf1bbff7e58e51b1c2d6e3d",
     "player/stubs/nam_dispatch_trampoline.c": "d3af2e2bbe2c321c243718914823e6fbdde9061c6c9b6c1aefdf6ff6332c14ab",
     "player/stubs/nam_dispatch_trampoline.h": "2e752f2ab623de4b2aaa4d1f797382698c31c669ff9dd4bfc8caa37733c65335",
     "player/stubs/vendor/VERSION": "ff6303885e4f3e8c5d153e4bdaa61bfa5d774f9349a901a0f2e05f4be4b5bdad",
@@ -179,7 +179,7 @@
     "player/toolchains/messense-v1.1.0.json": "60a97f7f1e76a30fcd6e1c2aca66e4cb40194b78afdc7546f49e2e6ca77d7866"
   },
   "build": {
-    "git_revision": "c67b2b3949389f27a92561111af30e6a5ca6bf66",
+    "git_revision": "d5f775b915aeab1e88f7a8079f52e6b704acedf8",
     "nam_build_pass": "perf",
     "source_sha256": {
       "player/bootstrap_nam_deps.sh": "0b066055b3382ddf6736400c2c0af04835741ee43ae2a65775a971a482e0074a",
@@ -201,7 +201,7 @@
       "player/nam_registry.h": "64451b554072cd9aaf4e853723197d708aabfb1176661d5e85ca72c4c6edd42a",
       "player/nam_sha256.h": "028c31ff92dd56a5813be0727a344e009fa9c3c5b2e6ded9e77ffc4e3c3473d9",
       "player/patches/model.cpp.patch": "ada70ac1380c367babe5e973528b4de776433b8899b40e4d14d8a7e09125347d",
-      "player/stubs/nam_dispatch.cpp": "942e6219ee7bb9d9eb23d38dfd103dd04d17da33cfd3fe0cd8a73cbd16d616f2",
+      "player/stubs/nam_dispatch.cpp": "428a710d0e6bb18e3e80d03049546800e09fa1c00bf1bbff7e58e51b1c2d6e3d",
       "player/stubs/nam_dispatch_trampoline.c": "d3af2e2bbe2c321c243718914823e6fbdde9061c6c9b6c1aefdf6ff6332c14ab",
       "player/stubs/nam_dispatch_trampoline.h": "2e752f2ab623de4b2aaa4d1f797382698c31c669ff9dd4bfc8caa37733c65335",
       "player/stubs/vendor/VERSION": "ff6303885e4f3e8c5d153e4bdaa61bfa5d774f9349a901a0f2e05f4be4b5bdad",
@@ -222,7 +222,7 @@
     },
     "ssh": {
       "schema": 1,
-      "created_utc": "2026-10-06T20:02:16.719039+00:00",
+      "created_utc": "2026-10-06T20:21:56.176327+00:00",
       "source": {
         "url": "https://dropbear.nl/mirror/releases/dropbear-2024.86.tar.bz2",
         "sha256": "e78936dffc395f2e0db099321d6be659190966b99712b55c530dd0a1822e0a5e",
@@ -259,7 +259,7 @@
         "tool": "aarch64-unknown-linux-gnu-strip",
         "sha256": "403f95d1e287b703b1d594d3a2dcdbdcf3b15ee135f6eb32f33f593683daf283"
       },
-      "build_directory": "run-utdh4qgk",
+      "build_directory": "run-vs5dg2ca",
       "outputs": {
         "dropbear": {
           "class": "ELF64",
