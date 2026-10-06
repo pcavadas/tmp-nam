@@ -132,8 +132,8 @@ inventory ownership and mode are preserved and checked after ext4 creation.
 Card-writing and restoration instructions are in
 [the SD console guide](device/usb-console.md).
 
-The checked-in dispatcher (2,668,208 bytes, SHA-256
-`dd3cbc90e2292baf882da4011bc290dd0086dedd38eab679493f87f594d19f21`) is built
+The checked-in dispatcher (2,668,240 bytes, SHA-256
+`41b3f3237d69127d753c53043376ce795fe168e330717790337482bbc2a9ab47`) is built
 from the revisions pinned in `player/stubs/vendor/VERSION`, for ARMv8-A tuned
 for Cortex-A57, C++17, no fast-math. `NAM_FEATURES` (`player/nam_build_common.sh`)
 and the Core patch add:
@@ -166,7 +166,7 @@ with the trainer architectures and seeded random weights
 1. Boot with a non-NAM preset and wait for `NAM dispatch ARMED` in
    `/tmp/nam_dispatch.log`.
 2. Verify `/usr/local/lib/nam_dispatch.so` is
-   `dd3cbc90e2292baf882da4011bc290dd0086dedd38eab679493f87f594d19f21`.
+   `41b3f3237d69127d753c53043376ce795fe168e330717790337482bbc2a9ab47`.
 3. Add a capture from the app and load it through the normal User IR
    picker. If it needs a smaller A2 size, set it in `player.json` before
    loading it.

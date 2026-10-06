@@ -386,7 +386,7 @@ export async function mockInvoke(
       return {
         port: "simulator",
         build_id: "nam-card-2026.10-r1",
-        dispatch_sha256: "dd3cbc90e2292baf",
+        dispatch_sha256: "41b3f3237d69127d",
         python: "3.5.6",
         simulated: true,
         busy,
