@@ -1,10 +1,12 @@
 // Player's zero-input skip must be invisible: output bit-identical to running the
 // model on every block, across silence gaps (including -0.0) and varied blocks.
-// Engine and model both at 48 kHz so Player feeds the model the caller's blocks.
+// Engine and model both at 48 kHz so Player feeds the model the caller's blocks;
+// then a 44.1 kHz engine, where the model sees the resampler's output instead.
 #include <cassert>
 #include <cmath>
 #include <cstring>
 #include <iostream>
+#include <memory>
 #include <random>
 #include <string>
 #include <vector>
@@ -46,6 +48,49 @@ std::vector<float> reference(const json& model, double size, const std::vector<f
   return nam_test::process_blocks(*dsp, input, blocks);
 }
 
+// Forwards to a model but reports no settle length, so Player never skips it.
+class NoSkip : public nam::DSP {
+ public:
+  explicit NoSkip(std::unique_ptr<nam::DSP> inner)
+      : DSP(1, 1, inner->GetExpectedSampleRate()), inner_(std::move(inner)) {}
+  void process(NAM_SAMPLE** input, NAM_SAMPLE** output, const int num_frames) override {
+    inner_->process(input, output, num_frames);
+  }
+  void Reset(const double sample_rate, const int max_buffer_size) override {
+    inner_->SetPrewarmOnReset(GetPrewarmOnReset());
+    inner_->Reset(sample_rate, max_buffer_size);
+  }
+  void prewarm() override { inner_->prewarm(); }
+
+ private:
+  std::unique_ptr<nam::DSP> inner_;
+};
+
+// Player at a 44.1 kHz engine rate with a 48 kHz model: the skip, now behind the
+// input and output resamplers, must still leave the output bit-identical.
+void check_resampled(const std::string& label, const json& model) {
+  static const int kBlocks[] = {32, 1, 7, 64, 35, 256, 13, 32};
+  const auto input = signal_with_gaps();
+  nam::DspLoadOptions options;
+  options.prewarm = false;
+  tmp_nam::Options popt;
+  popt.engine_rate = 44100;
+  popt.max_block = 256;
+  tmp_nam::Player skipping(nam::get_dsp(model, options), popt);
+  tmp_nam::Player full(std::make_unique<NoSkip>(nam::get_dsp(model, options)), popt);
+  std::vector<float> got(input.size()), want(input.size());
+  for (size_t pos = 0, b = 0; pos < input.size(); b++) {
+    const size_t n = std::min<size_t>(static_cast<size_t>(kBlocks[b % std::size(kBlocks)]), input.size() - pos);
+    skipping.process(input.data() + pos, got.data() + pos, n);
+    full.process(input.data() + pos, want.data() + pos, n);
+    pos += n;
+  }
+  assert(std::memcmp(got.data(), want.data(), got.size() * sizeof(float)) == 0);
+  std::cout << label << " at 44.1 kHz: bit-identical, skipped " << skipping.skipped_model_frames()
+            << " model frames\n";
+  assert(skipping.skipped_model_frames() > 0 && full.skipped_model_frames() == 0);
+}
+
 void check(const std::string& label, const json& model, double size, bool expect_skip) {
   static const int kBlocks[] = {32, 1, 7, 64, 35, 256, 13, 32};
   const auto input = signal_with_gaps();
@@ -78,9 +123,12 @@ int main() {
 #if defined(NAM_ENABLE_A2_FAST)
   check("A2 size 0 (a2_fast<3>)", a2, 0.0, true);
   check("A2 size 1 (a2_fast<8>)", a2, 1.0, true);
+  check_resampled("A2 a2_fast<3>", a2["config"]["submodels"][0]["model"]);
+  check_resampled("A2 a2_fast<8>", a2["config"]["submodels"][1]["model"]);
 #endif
 #if defined(NAM_ENABLE_A1_FAST) && defined(__aarch64__)
   check("A1 8/4 (a1_fast<8,4>)", a1, 1.0, true);
+  check_resampled("A1 a1_fast<8,4>", a1);
 #else
   check("A1 8/4 (generic)", a1, 1.0, false);
 #endif
