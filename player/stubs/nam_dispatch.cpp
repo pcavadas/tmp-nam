@@ -579,14 +579,14 @@ void irproc_dtor_handler(void* self) {
   reinterpret_cast<void (*)(void*)>(g_dtor_tramp.exec_buffer)(self);
 }
 
-// A recognized NAM request that cannot even start preparation: drop any binding
-// on this processor so Fender's path (the unity placeholder) runs instead.
-void unbind_failed_nam(void* self, const char* path, const char* reason) {
-  const auto cleared = g_players.clear_details(self);
-  if (cleared.cleared && g_loader)
-    g_loader->cancel(cleared.index, cleared.generation);
-  logf("NAM load failed path=%s self=%p unbound=%d: %s", path, self,
-       cleared.cleared ? 1 : 0, reason);
+using NamTicket = tmp_nam::Registry<NamEntry, kInstanceCapacity>::Ticket;
+
+// A failed NAM request: drop the binding its own generation owns, so Fender's
+// path (the unity placeholder) runs instead. A newer load or an ordinary clear
+// on the same processor is never disturbed.
+bool unbind_failed_nam(NamTicket ticket) {
+  if (g_loader) g_loader->cancel(ticket.index, ticket.generation);
+  return g_players.clear_if_current(ticket);
 }
 
 loadfile_result_t loadfile_handler(void* self, void* str_ref) {
@@ -599,6 +599,19 @@ loadfile_result_t loadfile_handler(void* self, void* str_ref) {
           ? static_cast<const std::string*>(str_ref)
           : nullptr;
   const bool requested_nam = requested && is_nam_path(requested->c_str());
+  // A NAM request reserves its generation before the stock call, so whatever it
+  // later clears on failure is its own binding, never a newer one.
+  NamTicket ticket{0, 0, false};
+  bool ticket_started = false;
+  const char* reservation_failure = nullptr;
+  if (requested_nam) {
+    try {
+      ticket = g_players.begin(self);
+      ticket_started = true;
+    } catch (const std::exception& error) {
+      reservation_failure = error.what();
+    }
+  }
   t_loadfile_redirected_nam = false;
   t_in_loadfile = true;
   loadfile_result_t original_result;
@@ -614,6 +627,10 @@ loadfile_result_t loadfile_handler(void* self, void* str_ref) {
       const auto cleared = g_players.clear_details(self);
       if (cleared.cleared && g_loader)
         g_loader->cancel(cleared.index, cleared.generation);
+    }
+    if (ticket_started) {
+      if (g_loader) g_loader->cancel(ticket.index, ticket.generation);
+      (void)g_players.cancel(ticket);
     }
     throw;  // preserve Fender's original exception behavior
   }
@@ -639,23 +656,22 @@ loadfile_result_t loadfile_handler(void* self, void* str_ref) {
   // placeholder: an audible bypass) and returns the stock result. It never throws:
   // the firmware builds the IR unit around this call, and an exception there
   // leaves the unit half-built, so its pooled IRProcessor is never released.
-  if (!redirected_nam || !g_armed.load(std::memory_order_acquire) ||
-      !ensure_process_trampoline()) {
-    unbind_failed_nam(self, requested->c_str(), "NAM process dispatch is unavailable");
-    return original_result;
-  }
-  if (original_result == 0) {
-    unbind_failed_nam(self, requested->c_str(), "stock NAM placeholder load failed");
+  const std::string requested_path = *requested;
+  const char* early_failure =
+      reservation_failure                                      ? reservation_failure
+      : !redirected_nam || !g_armed.load(std::memory_order_acquire) ||
+              !ensure_process_trampoline()                     ? "NAM process dispatch is unavailable"
+      : original_result == 0                                   ? "stock NAM placeholder load failed"
+                                                               : nullptr;
+  if (early_failure) {
+    const bool unbound = ticket_started && unbind_failed_nam(ticket);
+    logf("NAM load failed path=%s self=%p unbound=%d: %s", requested_path.c_str(),
+         self, unbound ? 1 : 0, early_failure);
     return original_result;
   }
 
-  const std::string requested_path = *requested;
-  tmp_nam::Registry<NamEntry, kInstanceCapacity>::Ticket ticket{0, 0, false};
-  bool ticket_started = false;
   std::string failure;
   try {
-    ticket = g_players.begin(self);
-    ticket_started = true;
     // The generation covers the entire preparation interval. If a newer NAM
     // load or an ordinary clear wins while this work is in progress, publish
     // rejects this exact ticket and the failure cleanup cannot disturb the
@@ -703,11 +719,7 @@ loadfile_result_t loadfile_handler(void* self, void* str_ref) {
   } catch (...) {
     failure = "unknown error";
   }
-  bool unbound = false;
-  if (ticket_started) {
-    if (g_loader) g_loader->cancel(ticket.index, ticket.generation);
-    unbound = g_players.clear_if_current(ticket);
-  }
+  const bool unbound = unbind_failed_nam(ticket);
   logf("NAM load failed path=%s slot=%zu generation=%lu unbound=%d: %s",
        requested_path.c_str(), ticket.index, (unsigned long)ticket.generation,
        unbound ? 1 : 0, failure.c_str());

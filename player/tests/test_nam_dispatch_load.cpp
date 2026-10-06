@@ -29,10 +29,14 @@ thread_local bool g_original_throws = false;
 thread_local std::string g_redirected_path;
 std::atomic<unsigned> g_original_calls{0};
 
-loadfile_result_t fake_original_loadfile(void*, void* str_ref) {
+// Runs inside the stock call, after the redirect (a concurrent newer load).
+void (*g_during_original)(void*) = nullptr;
+
+loadfile_result_t fake_original_loadfile(void* self, void* str_ref) {
   const auto& path = *static_cast<const std::string*>(str_ref);
   g_original_calls.fetch_add(1);
   g_redirected_path = classify_and_redirect(path.c_str());
+  if (g_during_original) g_during_original(self);
   if (g_original_throws) throw OriginalLoadFailure{};
   return g_original_result;
 }
@@ -138,6 +142,10 @@ void publish_newer_generation(void* self, Registry::Ticket) {
   g_injected_newer->slot = newer.index;
   g_injected_newer->generation = newer.generation;
   assert(g_players.publish(newer, g_injected_newer));
+}
+
+void publish_newer_during_original(void* self) {
+  publish_newer_generation(self, {});
 }
 
 void bind_fresh(void* self, const std::string& path) {
@@ -584,6 +592,22 @@ void test_held_invalid_cleanup_preserves_newer(
   assert(g_live_entries.load() == 0);
 }
 
+// An older NAM request whose stock placeholder load fails after a newer capture
+// was published on the same processor must not clear that newer binding.
+void test_early_failure_cannot_erase_newer(const std::string& candidate,
+                                           const std::string& newer_path) {
+  int instance = 0;
+  g_injected_newer = prepare_instance(newer_path);
+  g_during_original = publish_newer_during_original;
+  assert(invoke(&instance, candidate, 0) == 0);
+  g_during_original = nullptr;
+  assert(bound_entry(&instance) == g_injected_newer.get());
+  clear_and_collect(&instance);
+  g_injected_newer.reset();
+  (void)g_players.collect();
+  assert(g_live_entries.load() == 0);
+}
+
 void test_fresh_sequences_and_identical_captures(
     const std::string& a, const std::string& b, const std::string& c) {
   int sequence = 0;
@@ -694,6 +718,7 @@ int main(int argc, char** argv) {
   test_fresh_sequences_and_identical_captures(
       valid_a.string(), valid_b.string(), valid_c.string());
   test_stale_publication_cannot_erase_newer(valid_a.string(), valid_c.string());
+  test_early_failure_cannot_erase_newer(valid_a.string(), valid_c.string());
 
   g_armed.store(false, std::memory_order_release);
   delete g_loader;
