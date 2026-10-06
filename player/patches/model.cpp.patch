@@ -905,42 +905,33 @@ index 5d0e9b3..0603b5a 100644
  };
  } // namespace nam
 diff --git a/NAM/wavenet/a2_fast.cpp b/NAM/wavenet/a2_fast.cpp
-index 276ed1a..658a7b5 100644
+index 276ed1a..81dc473 100644
 --- a/NAM/wavenet/a2_fast.cpp
 +++ b/NAM/wavenet/a2_fast.cpp
-@@ -25,6 +25,10 @@
-
-   #include <Eigen/Dense>
-
-+  #if defined(__aarch64__)
-+    #include <arm_neon.h>
-+  #endif
+@@ -1,3 +1,64 @@
++#if defined(NAM_ENABLE_A2_FAST) || (defined(NAM_ENABLE_A1_FAST) && defined(__aarch64__))
 +
-   #include "../dsp.h"
-
- namespace nam
-@@ -48,7 +52,7 @@ namespace
- //   - condition_size == input_size == out_channels == 1
- //   - LeakyReLU(0.01) on every layer, no gating, no FiLM, no head1x1
- //   - layer1x1 active (groups=1), head rechannel conv k=16 bias=true
--//   - head_scale == 0.01, no post-stack head
-+//   - head_scale present (trained value is the last weight), no post-stack head
- //
- // Weight storage: column-major per kernel tap. For a (out_ch × in_ch) matrix
- // at tap k, element (row=i, col=j) lives at w[k][j * out_ch + i]. All 1×1
-@@ -66,6 +70,8 @@ public:
-   ~A2FastModel() override = default;
-
-   void process(NAM_SAMPLE** input, NAM_SAMPLE** output, int num_frames) override;
-+  long ZeroInputSettleSamples() override { return _prewarm_samples; }
-+  const char* ImplementationName() override { return Channels == 3 ? "a2_fast<3>" : "a2_fast<8>"; }
-
- protected:
-   void SetMaxBufferSize(int maxBufferSize) override;
-@@ -285,6 +291,139 @@ int next_pow2(int v)
-     p <<= 1;
-   return p;
- }
++  #include <algorithm>
++  #include <cstddef>
++  #include <cstring>
++
++  #include "a2_fast.h"
++
++// Helpers shared by the A2 and A1 fast paths.
++namespace nam
++{
++namespace wavenet
++{
++namespace
++{
++// Smallest power of 2 >= v (v > 0).
++int next_pow2(int v)
++{
++  int p = 1;
++  while (p < v)
++    p <<= 1;
++  return p;
++}
 +
 +// Pow2 ring tail mirror: cols [pow2_size, pow2_size + mbs) must equal cols
 +// [0, mbs). Every column there was mirrored when last written (or is zero from
@@ -963,6 +954,60 @@ index 276ed1a..658a7b5 100644
 +  mirror_written_cols(hist, channels, pow2_size, mbs, 0, num_frames - first);
 +}
 +
++// Both fast paths need no post-stack head and a numeric head_scale (the trained
++// scale itself is read from the last weight, like WaveNet::set_weights_).
++bool plain_head(const nlohmann::json& config)
++{
++  auto head_it = config.find("head");
++  if (head_it != config.end() && !head_it->is_null())
++    return false;
++  auto hs_it = config.find("head_scale");
++  return hs_it != config.end() && hs_it->is_number();
++}
++} // namespace
++} // namespace wavenet
++} // namespace nam
++
++#endif
++
+ #if defined(NAM_ENABLE_A2_FAST)
+
+   // Ring-buffer strategy:
+@@ -25,6 +86,10 @@
+
+   #include <Eigen/Dense>
+
++  #if defined(__aarch64__)
++    #include <arm_neon.h>
++  #endif
++
+   #include "../dsp.h"
+
+ namespace nam
+@@ -48,7 +113,7 @@ namespace
+ //   - condition_size == input_size == out_channels == 1
+ //   - LeakyReLU(0.01) on every layer, no gating, no FiLM, no head1x1
+ //   - layer1x1 active (groups=1), head rechannel conv k=16 bias=true
+-//   - head_scale == 0.01, no post-stack head
++//   - head_scale present (trained value is the last weight), no post-stack head
+ //
+ // Weight storage: column-major per kernel tap. For a (out_ch × in_ch) matrix
+ // at tap k, element (row=i, col=j) lives at w[k][j * out_ch + i]. All 1×1
+@@ -66,6 +131,8 @@ public:
+   ~A2FastModel() override = default;
+
+   void process(NAM_SAMPLE** input, NAM_SAMPLE** output, int num_frames) override;
++  long ZeroInputSettleSamples() override { return _prewarm_samples; }
++  const char* ImplementationName() override { return Channels == 3 ? "a2_fast<3>" : "a2_fast<8>"; }
+
+ protected:
+   void SetMaxBufferSize(int maxBufferSize) override;
+@@ -277,14 +344,117 @@ void A2FastModel<Channels>::_load_weights(std::vector<float>& weights)
+ // -----------------------------------------------------------------------------
+ namespace
+ {
+-// Smallest power of 2 >= v (v > 0).
+-int next_pow2(int v)
 +  #if defined(__aarch64__)
 +// -----------------------------------------------------------------------------
 +// Fused 8-channel A2 layer on NEON: dilated conv (all taps) + bias + mixin +
@@ -1004,7 +1049,11 @@ index 276ed1a..658a7b5 100644
 +      }
 +
 +inline float32x4_t leaky_relu_q(const float32x4_t x)
-+{
+ {
+-  int p = 1;
+-  while (p < v)
+-    p <<= 1;
+-  return p;
 +  return vbslq_f32(vcgtq_f32(x, vdupq_n_f32(0.0f)), x, vmulq_f32(x, vdupq_n_f32(kLeakySlope)));
 +}
 +
@@ -1068,7 +1117,7 @@ index 276ed1a..658a7b5 100644
 +    const size_t o = static_cast<size_t>(f) * 8;
 +    layer8_tail(al, ah, cond[f], mixin_w, l1x1_w, l1x1_b, hsum + o, lin + o);
 +  }
-+}
+ }
 +
 +    #undef NAM_A2_GEMV8
 +    #undef NAM_A2_COL4
@@ -1077,7 +1126,7 @@ index 276ed1a..658a7b5 100644
  } // namespace
 
  template <int Channels>
-@@ -348,8 +487,7 @@ void A2FastModel<Channels>::_ring_write(Layer& L, int num_frames)
+@@ -348,8 +518,7 @@ void A2FastModel<Channels>::_ring_write(Layer& L, int num_frames)
      std::memcpy(hist, src + static_cast<size_t>(first) * Channels,
                  static_cast<size_t>(num_frames - first) * Channels * sizeof(float));
    }
@@ -1087,7 +1136,7 @@ index 276ed1a..658a7b5 100644
    L.write_pos = (wp + num_frames) & L.pow2_mask;
    #else
    if (L.write_pos + num_frames > L.history_cols)
-@@ -380,8 +518,7 @@ void A2FastModel<Channels>::_head_ring_write(int num_frames)
+@@ -380,8 +549,7 @@ void A2FastModel<Channels>::_head_ring_write(int num_frames)
      std::memcpy(hist, src + static_cast<size_t>(first) * Channels,
                  static_cast<size_t>(num_frames - first) * Channels * sizeof(float));
    }
@@ -1097,7 +1146,7 @@ index 276ed1a..658a7b5 100644
    _head_write_pos = (wp + num_frames) & _head_pow2_mask;
    #else
    const int keep = kHeadKernelSize - 1;
-@@ -553,6 +690,17 @@ void A2FastModel<Channels>::_layer_forward_k(Layer& L, const float* cond, int nu
+@@ -553,6 +721,17 @@ void A2FastModel<Channels>::_layer_forward_k(Layer& L, const float* cond, int nu
    }
    else
    {
@@ -1115,23 +1164,27 @@ index 276ed1a..658a7b5 100644
      // Use Eigen's tuned 8x8 × 8xN GEMM for the whole block at once. Unlike a
      // small-tile version, this hits Eigen's actual GEMM kernel (tuned for
      // inner dimensions of ~64) rather than its tiny-matrix fallback path.
-@@ -763,12 +911,12 @@ bool is_a2_shape(const nlohmann::json& config, int* channels)
-   if (head_it != config.end() && !head_it->is_null())
+@@ -758,16 +937,9 @@ bool is_a2_shape(const nlohmann::json& config, int* channels)
+   if (layers_it == config.end() || !layers_it->is_array() || layers_it->size() != 1)
      return false;
 
--  // head_scale must be exactly 0.01
-+  // head_scale must be present. Its value is not part of the shape: like
-+  // WaveNet::set_weights_, A2FastModel takes the trained scale from the last
-+  // weight, and trained A2 exports store values other than 0.01.
-   auto hs_it = config.find("head_scale");
-   if (hs_it == config.end() || !hs_it->is_number())
-     return false;
--  if (!close_to(hs_it->get<float>(), kHeadScale))
+-  // No post-stack head
+-  auto head_it = config.find("head");
+-  if (head_it != config.end() && !head_it->is_null())
 -    return false;
+-
+-  // head_scale must be exactly 0.01
+-  auto hs_it = config.find("head_scale");
+-  if (hs_it == config.end() || !hs_it->is_number())
+-    return false;
+-  if (!close_to(hs_it->get<float>(), kHeadScale))
++  // No post-stack head; head_scale present. Its value is not part of the shape:
++  // trained A2 exports store values other than 0.01.
++  if (!plain_head(config))
+     return false;
 
    // in_channels defaults to 1, must be 1
-   if (config.value("in_channels", 1) != 1)
-@@ -901,3 +1049,524 @@ std::unique_ptr<ModelConfig> create_a2_fast_config(const nlohmann::json& config,
+@@ -901,3 +1073,521 @@ std::unique_ptr<ModelConfig> create_a2_fast_config(const nlohmann::json& config,
  } // namespace nam
 
  #endif // NAM_ENABLE_A2_FAST
@@ -1176,14 +1229,6 @@ index 276ed1a..658a7b5 100644
 +// targets keep the generic WaveNet.
 +// =============================================================================
 +constexpr int kKernel = 3;
-+
-+int a1_next_pow2(const int v)
-+{
-+  int p = 1;
-+  while (p < v)
-+    p <<= 1;
-+  return p;
-+}
 +
 +struct A1Shape
 +{
@@ -1285,15 +1330,7 @@ index 276ed1a..658a7b5 100644
 +  std::memcpy(hist + static_cast<size_t>(wp) * CP, src, static_cast<size_t>(first) * CP * sizeof(float));
 +  if (first < num_frames)
 +    std::memcpy(hist, src + static_cast<size_t>(first) * CP, static_cast<size_t>(num_frames - first) * CP * sizeof(float));
-+  // Mirror only the written columns that fall inside [0, mbs).
-+  auto mirror = [&](const int begin, int end) {
-+    end = std::min(end, mbs);
-+    if (begin < end)
-+      std::memcpy(hist + static_cast<size_t>(L.pow2 + begin) * CP, hist + static_cast<size_t>(begin) * CP,
-+                  static_cast<size_t>(end - begin) * CP * sizeof(float));
-+  };
-+  mirror(wp, wp + first);
-+  mirror(0, num_frames - first);
++  mirror_ring_write(hist, CP, L.pow2, mbs, wp, num_frames);
 +  L.write_pos = (wp + num_frames) & L.mask;
 +}
 +
@@ -1508,7 +1545,7 @@ index 276ed1a..658a7b5 100644
 +    for (auto& L : a.layers)
 +    {
 +      const int lookback = (kKernel - 1) * L.dilation;
-+      L.pow2 = a1_next_pow2(lookback + mbs);
++      L.pow2 = next_pow2(lookback + mbs);
 +      L.mask = L.pow2 - 1;
 +      L.history.assign(static_cast<size_t>(CP) * (L.pow2 + mbs), 0.0f);
 +      L.write_pos = lookback;
@@ -1538,22 +1575,40 @@ index 276ed1a..658a7b5 100644
 +  std::vector<float> _cond, _x1, _h1, _x2, _h2;
 +};
 +
++// The supported trainer sizes and their padded models (channels padded to multiples of 4).
++struct A1Size
++{
++  int c1, c2;
++  std::unique_ptr<DSP> (*make)(const A1Shape&, const std::vector<float>&, double);
++};
++
++template <int CP1, int CP2>
++std::unique_ptr<DSP> make_a1(const A1Shape& shape, const std::vector<float>& weights, const double sample_rate)
++{
++  return std::make_unique<A1FastModel<CP1, CP2>>(shape, weights, sample_rate);
++}
++
++constexpr A1Size kSizes[] = {
++  {16, 8, &make_a1<16, 8>}, {12, 6, &make_a1<12, 8>}, {8, 4, &make_a1<8, 4>}, {4, 2, &make_a1<4, 4>}};
++
++const A1Size* find_size(const int c1, const int c2)
++{
++  for (const auto& size : kSizes)
++    if (size.c1 == c1 && size.c2 == c2)
++      return &size;
++  return nullptr;
++}
++
 +struct A1FastConfig : public ModelConfig
 +{
 +  A1Shape shape;
 +
 +  std::unique_ptr<DSP> create(std::vector<float> weights, double sampleRate) override
 +  {
-+    const int c1 = shape.c1, c2 = shape.c2;
-+    if (c1 == 16 && c2 == 8)
-+      return std::make_unique<A1FastModel<16, 8>>(shape, weights, sampleRate);
-+    if (c1 == 12 && c2 == 6)
-+      return std::make_unique<A1FastModel<12, 8>>(shape, weights, sampleRate);
-+    if (c1 == 8 && c2 == 4)
-+      return std::make_unique<A1FastModel<8, 4>>(shape, weights, sampleRate);
-+    if (c1 == 4 && c2 == 2)
-+      return std::make_unique<A1FastModel<4, 4>>(shape, weights, sampleRate);
-+    throw std::runtime_error("A1FastConfig: unsupported channels");
++    const A1Size* size = find_size(shape.c1, shape.c2);
++    if (size == nullptr)
++      throw std::runtime_error("A1FastConfig: unsupported channels");
++    return size->make(shape, weights, sampleRate);
 +  }
 +};
 +
@@ -1582,11 +1637,7 @@ index 276ed1a..658a7b5 100644
 +  for (auto it = config.begin(); it != config.end(); ++it)
 +    if (it.key() != "layers" && it.key() != "head" && it.key() != "head_scale")
 +      return false;
-+  auto head_it = config.find("head");
-+  if (head_it != config.end() && !head_it->is_null())
-+    return false;
-+  auto hs_it = config.find("head_scale");
-+  if (hs_it == config.end() || !hs_it->is_number())
++  if (!plain_head(config))
 +    return false;
 +  auto layers_it = config.find("layers");
 +  if (layers_it == config.end() || !layers_it->is_array() || layers_it->size() != 2)
@@ -1624,11 +1675,10 @@ index 276ed1a..658a7b5 100644
 +  }
 +  if (input[0] != 1 || head[0] != channels[1] || input[1] != channels[0] || head[1] != 1)
 +    return false;
-+  const int c1 = channels[0], c2 = channels[1];
-+  if (!((c1 == 16 && c2 == 8) || (c1 == 12 && c2 == 6) || (c1 == 8 && c2 == 4) || (c1 == 4 && c2 == 2)))
++  if (find_size(channels[0], channels[1]) == nullptr)
 +    return false;
-+  s->c1 = c1;
-+  s->c2 = c2;
++  s->c1 = channels[0];
++  s->c2 = channels[1];
 +  s->head_bias1 = head_bias[0];
 +  s->head_bias2 = head_bias[1];
 +  return true;

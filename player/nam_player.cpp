@@ -233,7 +233,6 @@ void Player::run_model(float* input, float* output, std::size_t frames) {
     zero_skipping_ = false;
   } else if (zero_skipping_) {
     std::fill_n(output, frames, zero_output_);
-    zero_run_ += static_cast<long>(frames);
     counters_.skipped_model_frames += frames;
     return;
   }
