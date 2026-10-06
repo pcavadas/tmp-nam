@@ -39,7 +39,9 @@ bank. On CPU1 that bank receives exact zeros, and a settled feed-forward model
 repeats its constant output instead of running (about 26 µs per callback for an
 inactive Matchless A1). On CPU2 it receives the input at about -123 dB and runs
 in full; it is not gated by level because an active capture's input can sit
-that low too.
+that low too. Neither bank adds load to the active one: the CPU2 bank runs on its own
+thread in parallel with CPU1, and it costs no more than that preset did while
+it was active.
 
 The player keeps the full network as the default and never changes a capture
 silently. Optional `/data/nam/player.json` selects a size by model hash on the
