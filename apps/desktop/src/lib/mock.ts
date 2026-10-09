@@ -599,6 +599,14 @@ export async function mockInvoke(
       const sha = args.sha256 as string;
       await sleep(150);
       const patch = args.options as PlayerOptionsPatch;
+      // Like the backend's `deny_unknown_fields`: a misspelled option is an error.
+      const unknown = Object.keys(patch).find(
+        (k) => k !== "size" && k !== "output_gain",
+      );
+      if (unknown !== undefined)
+        throw new Error(
+          `invalid args \`options\` for command \`unit_set_options\`: unknown field \`${unknown}\``,
+        );
       models = models.map((m) => {
         if (m.sha256 !== sha) return m;
         const options = { ...m.options };

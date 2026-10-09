@@ -2,7 +2,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { api, type AddOutcome } from "../lib/api";
+import { api, type AddOutcome, type PlayerOptionsPatch } from "../lib/api";
 import { resetMockWifi } from "../lib/mock";
 import App from "../App";
 
@@ -150,6 +150,16 @@ describe("Captures", () => {
     } finally {
       list.mockRestore();
     }
+  });
+
+  it("refuses an option patch with an unknown field", async () => {
+    const [first] = (await api.unitList()).models;
+    if (!first?.sha256) throw new Error("missing mock capture");
+    await expect(
+      api.unitSetOptions(first.sha256, {
+        outputGain: 4,
+      } as unknown as PlayerOptionsPatch),
+    ).rejects.toThrow(/unknown field `outputGain`/);
   });
 
   it("shows settings errors even when no captures are installed", async () => {

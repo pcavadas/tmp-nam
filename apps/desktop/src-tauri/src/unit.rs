@@ -131,7 +131,9 @@ pub struct PlayerOptions {
 }
 
 /// An omitted patch field keeps the current value; null removes the override.
+/// Unknown fields are refused so a misspelled option can't save as a no-op.
 #[derive(Deserialize, Debug, Default)]
+#[serde(deny_unknown_fields)]
 pub struct PlayerOptionsPatch {
     #[serde(default)]
     pub size: OptionChange,
@@ -1618,6 +1620,14 @@ mod tests {
         assert_eq!(gain.size, OptionChange::Keep);
         assert_eq!(gain.output_gain.helper_arg(), "-");
         assert!(serde_json::from_str::<PlayerOptionsPatch>(r#"{"size":"0"}"#).is_err());
+    }
+
+    #[test]
+    fn option_patch_refuses_unknown_fields() {
+        for json in [r#"{"outputGain":4}"#, r#"{"size":0,"gain":1}"#] {
+            let err = serde_json::from_str::<PlayerOptionsPatch>(json).unwrap_err();
+            assert!(err.to_string().contains("unknown field"), "{json}: {err}");
+        }
     }
 
     #[test]
