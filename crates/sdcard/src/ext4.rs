@@ -299,14 +299,19 @@ fn verify(
             return bail(what);
         }
     }
-    // Root's authorized_keys points at the allow-list the app keeps on /data.
-    let link = request(
-        debugfs,
-        image,
-        &format!("stat /{}", rootfs::AUTHORIZED_KEYS_LINK),
-    )?;
-    if !link.contains(&format!("Fast link dest: \"{}\"", rootfs::AUTHORIZED_KEYS)) {
-        return bail("authorized_keys link mismatch in ext4 image");
+    // The links the builder adds: the USB console's enable link, and root's
+    // authorized_keys, which points at the allow-list the app keeps on /data.
+    for (path, dest) in [
+        (
+            layout.console_enable_target.as_str(),
+            rootfs::CONSOLE_ENABLE_LINK,
+        ),
+        (rootfs::AUTHORIZED_KEYS_LINK, rootfs::AUTHORIZED_KEYS),
+    ] {
+        let link = request(debugfs, image, &format!("stat /{path}"))?;
+        if !link.contains(&format!("Fast link dest: \"{dest}\"")) {
+            return bail(format!("{path} link mismatch in ext4 image"));
+        }
     }
     if !by_path.contains_key("boot/Image") {
         return bail("rootfs metadata inventory is incomplete");

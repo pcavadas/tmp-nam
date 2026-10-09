@@ -72,6 +72,9 @@ pub const SSH_DIR: &str = "home/root/.ssh";
 pub const AUTHORIZED_KEYS_LINK: &str = "home/root/.ssh/authorized_keys";
 pub const AUTHORIZED_KEYS: &str = "/data/nam/ssh/authorized_keys";
 
+/// What the USB console's enable link (`layout.console_enable_target`) points at.
+pub const CONSOLE_ENABLE_LINK: &str = "../usb-console.service";
+
 fn link_authorized_keys(rootfs: &Path) -> Result<()> {
     let dir = rootfs.join(SSH_DIR);
     if dir.is_symlink() {
@@ -229,7 +232,7 @@ pub fn apply(
     if exists_or_link(&enable) {
         return bail("usb-console service is already enabled in source rootfs");
     }
-    symlink("../usb-console.service", &enable)?;
+    symlink(CONSOLE_ENABLE_LINK, &enable)?;
 
     copy_asset(rootfs, device, &assets.nam_dispatch, 0o755)?;
 
