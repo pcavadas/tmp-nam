@@ -1,4 +1,5 @@
-// src/ds/Controls.tsx — banner, fields, checkbox/radio, pop-up button, menu, segmented control.
+// src/ds/Controls.tsx — banner, fields, checkbox/radio, pop-up button, menu, segmented control,
+// switch.
 //
 // Controlled when `value` is given, otherwise the component keeps its own state
 // (`value ?? inner`, no syncing effect).
@@ -11,7 +12,7 @@ import {
   type InputHTMLAttributes,
   type ReactNode,
 } from "react";
-import { Button, type ButtonProps } from "./Button";
+import { Button, Spinner, type ButtonProps } from "./Button";
 import { Icon, type IconName } from "./Icon";
 import { cx } from "./util";
 
@@ -392,5 +393,44 @@ export function SegmentedControl<V extends string>({
         );
       })}
     </div>
+  );
+}
+
+/** On/off for a setting that applies at once. `busy` shows a spinner and blocks input. */
+export function Switch({
+  checked,
+  onChange,
+  disabled,
+  busy,
+  title,
+  "aria-label": ariaLabel,
+  "aria-describedby": describedBy,
+}: {
+  checked: boolean;
+  onChange?: (checked: boolean) => void;
+  disabled?: boolean;
+  busy?: boolean;
+  /** Tooltip, e.g. why the switch is disabled. */
+  title?: string;
+  "aria-label"?: string;
+  "aria-describedby"?: string;
+}) {
+  return (
+    <span className="tn-switch-wrap" title={title}>
+      {busy && <Spinner label="Working" />}
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        aria-label={ariaLabel}
+        aria-describedby={describedBy}
+        aria-busy={busy ? true : undefined}
+        disabled={disabled === true || busy === true}
+        className={cx("tn-switch", checked && "is-on")}
+        onClick={() => onChange?.(!checked)}
+      >
+        <span className="tn-switch-knob" />
+      </button>
+    </span>
   );
 }

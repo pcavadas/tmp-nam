@@ -58,6 +58,8 @@ export interface UnitModel {
   info?: ModelInfo | null;
   error?: string | null;
   options: PlayerOptions;
+  /** This capture's player settings are invalid: `options` is empty, size unknown. */
+  options_invalid: boolean;
 }
 
 export interface UnitInfo {
@@ -212,6 +214,61 @@ export interface T3kPick {
   variant?: string | null;
 }
 
+/** ConnMan security as the engine encodes it. */
+export const SECURITY = {
+  unsupported: 0,
+  open: 1,
+  wep: 2,
+  psk: 3,
+  enterprise: 4,
+} as const;
+
+export interface WifiStatus {
+  /** The radio is powered (false too when ConnMan or the radio is unavailable). */
+  enabled: boolean;
+  connected: boolean;
+  /** Empty when the unit has no Wi-Fi interface. */
+  mac: string;
+  ipv4: string;
+  ssid: string;
+  security: number;
+}
+
+export interface WifiNetwork {
+  /** Empty for a hidden network. */
+  ssid: string;
+  security: number;
+  saved: boolean;
+  connected: boolean;
+  /** 0–100. */
+  signal: number;
+}
+
+export interface WifiState {
+  status: WifiStatus;
+  /** What the unit applies at every start; null when it didn't answer. */
+  saved_enabled: boolean | null;
+  networks: WifiNetwork[];
+  /** Whether the unit has a Wi-Fi interface; null when unknown. */
+  radio: boolean | null;
+  /** Fender's FENDER_UPDATE network profile is stored on the unit. */
+  fender_update: boolean;
+}
+
+export interface WifiJoin {
+  ssid: string;
+  security: number;
+  hidden: boolean;
+  /** Empty for open and saved networks. */
+  passphrase: string;
+}
+
+export type WifiJoinOutcome =
+  "connected" | "wrong_password" | "failed" | "no_response";
+
+/** The unit only forgets a network that's in range. */
+export type WifiForgetOutcome = "forgotten" | "out_of_range";
+
 /** An error from a command that classifies its failures (Tone3000). */
 export class ApiError extends Error {
   constructor(
@@ -282,6 +339,19 @@ export const api = {
   unitReload: () => call<null>("unit_reload"),
   unitSetOptions: (sha256: string, options: PlayerOptionsPatch) =>
     call<string | null>("unit_set_options", { sha256, options }),
+
+  /** Without networks when a scan follows anyway. */
+  wifiState: (withNetworks: boolean) =>
+    call<WifiState>("wifi_state", { withNetworks }),
+  /** A fresh scan; takes a few seconds. */
+  wifiScan: () => call<WifiNetwork[]>("wifi_scan"),
+  /** Resolves to the state the unit confirmed, without networks. */
+  wifiSetEnabled: (on: boolean) => call<WifiState>("wifi_set_enabled", { on }),
+  wifiJoin: (join: WifiJoin) => call<WifiJoinOutcome>("wifi_join", { join }),
+  wifiForget: (ssid: string, security: number) =>
+    call<WifiForgetOutcome>("wifi_forget", { ssid, security }),
+  /** The LAN guide's SSH section in the system browser. */
+  openLanGuide: () => call<null>("open_lan_guide"),
 
   settingsGet: () => call<Settings>("settings_get"),
   settingsSet: (settings: Settings) => call<null>("settings_set", { settings }),

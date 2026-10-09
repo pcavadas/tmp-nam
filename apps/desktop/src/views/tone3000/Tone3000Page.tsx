@@ -302,7 +302,7 @@ function ToneList({ onChangeVariants }: { onChangeVariants: () => void }) {
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const installing = app.op?.kind === "install" ? app.op : null;
-  const busy = app.busyReason !== null;
+  const busy = app.unitBusyReason !== null;
 
   // "Show in Tone3000" from a capture opens its tone.
   const { focusTone, clearFocusTone } = app;
@@ -682,7 +682,7 @@ function ToneList({ onChangeVariants }: { onChangeVariants: () => void }) {
             this finishes.
           </span>
         ) : busy ? (
-          <span>{app.busyReason}.</span>
+          <span>{app.unitBusyReason}.</span>
         ) : (
           <>
             <span style={{ color: "var(--text)", fontWeight: 600 }}>

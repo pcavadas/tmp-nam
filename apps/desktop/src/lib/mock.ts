@@ -18,8 +18,11 @@
 //   ?t3k=nokey|signedout|list   starting Tone3000 account state
 //   ?sd=tools|assets     missing build tools / damaged app assets
 //   ?tones=0             no tones on the Tone3000 account
+//   ?wifi=off|noradio|nohid|fender|silent|differs   Wi-Fi off, no radio, HID channel held
+//                        by another app, FENDER_UPDATE profile present, a join
+//                        that gets no answer, saved setting Off while the radio is on
 
-import { ApiError } from "./api";
+import { ApiError, SECURITY } from "./api";
 import type {
   AddOutcome,
   PlayerOptionsPatch,
@@ -33,6 +36,11 @@ import type {
   T3kPick,
   T3kTone,
   Variant,
+  WifiJoin,
+  WifiForgetOutcome,
+  WifiJoinOutcome,
+  WifiNetwork,
+  WifiState,
 } from "./api";
 
 type Handler = (payload: unknown) => void;
@@ -121,6 +129,7 @@ const capture = (
   sha256: `sha-${name}`,
   info,
   options: {},
+  options_invalid: false,
   ...extra,
 });
 
@@ -262,6 +271,148 @@ const TONES: T3kTone[] = [
     "Vox AC30 Top Boost": ["A1 standard", "A1 lite", "A1 feather", "A1 nano"],
   }),
 ];
+
+// ── Wi-Fi (mirrors `SimWifi`) ──────────────────────────────────────────────
+
+interface MockNetwork {
+  ssid: string;
+  security: number;
+  password: string;
+  signal: number;
+  saved: boolean;
+  hidden: boolean;
+}
+
+const WIFI_NO_HID =
+  "Wi-Fi settings use the unit's control channel, which another app (Pro Control or TMP Companion) is holding. Quit it, then try again in a minute.";
+
+interface MockWifi {
+  radio: boolean;
+  enabled: boolean;
+  savedEnabled: boolean;
+  connected: string | null;
+  fenderUpdate: boolean;
+  networks: MockNetwork[];
+}
+
+function seedWifi(): MockWifi {
+  const mode = flag("wifi");
+  const radio = mode !== "noradio";
+  const on = radio && mode !== "off";
+  const net = (
+    ssid: string,
+    security: number,
+    password: string,
+    signal: number,
+    saved = false,
+    hidden = false,
+  ): MockNetwork => ({ ssid, security, password, signal, saved, hidden });
+  return {
+    radio,
+    enabled: on,
+    savedEnabled: on && mode !== "differs",
+    connected: on ? "Studio" : null,
+    fenderUpdate: mode === "fender",
+    networks: [
+      net("Studio", SECURITY.psk, "studio-pass", 72, true),
+      // Saved with a password that has since changed: joining it fails.
+      net("Rehearsal Room", SECURITY.psk, "", 55, true),
+      net("Cafe Guest", SECURITY.open, "", 41),
+      net("Neighbours 5G", SECURITY.psk, "password1", 58),
+      net("Office", SECURITY.enterprise, "", 33),
+      net("New Router", SECURITY.unsupported, "", 50),
+      net("Back Room", SECURITY.psk, "backroom1", 30, false, true),
+    ],
+  };
+}
+
+// Seeded on first use: api.ts and this module import each other, so `SECURITY`
+// isn't initialized yet while this module loads.
+let seeded: MockWifi | null = null;
+const mockWifi = () => (seeded ??= seedWifi());
+
+function wifiReachable() {
+  if (flag("wifi") === "nohid") throw new ApiError("channel_held", WIFI_NO_HID);
+}
+
+function wifiNetworks(): WifiNetwork[] {
+  const wifi = mockWifi();
+  if (!wifi.enabled) return [];
+  return wifi.networks.map((n) => ({
+    ssid: n.hidden && wifi.connected !== n.ssid ? "" : n.ssid,
+    security: n.security,
+    saved: n.saved,
+    connected: wifi.connected === n.ssid,
+    signal: n.signal,
+  }));
+}
+
+function wifiState(withNetworks: boolean): WifiState {
+  const wifi = mockWifi();
+  const current = wifi.networks.find((n) => n.ssid === wifi.connected);
+  return {
+    status: {
+      enabled: wifi.enabled,
+      connected: !!current,
+      mac: wifi.radio ? "aa:bb:cc:00:11:22" : "",
+      ipv4: current ? "192.168.1.57" : "",
+      ssid: current?.ssid ?? "",
+      security: current?.security ?? 0,
+    },
+    saved_enabled: wifi.savedEnabled,
+    networks: withNetworks ? wifiNetworks() : [],
+    radio: wifi.radio,
+    fender_update: wifi.fenderUpdate,
+  };
+}
+
+function wifiSetEnabled(on: boolean) {
+  const wifi = mockWifi();
+  if (on && !wifi.radio) throw new Error("The unit couldn't turn Wi-Fi on.");
+  wifi.enabled = on;
+  wifi.savedEnabled = on;
+  const best = wifi.networks
+    .filter((n) => n.saved && n.password)
+    .sort((a, b) => b.signal - a.signal)[0];
+  wifi.connected = on && best ? best.ssid : null;
+}
+
+function wifiJoin(j: WifiJoin): WifiJoinOutcome {
+  const wifi = mockWifi();
+  if (!wifi.enabled) return "failed";
+  const n = wifi.networks.find(
+    (x) =>
+      x.ssid === j.ssid && x.security === j.security && x.hidden === j.hidden,
+  );
+  if (!n) return "failed";
+  const keyOk = n.saved
+    ? !!n.password
+    : n.security === SECURITY.open || j.passphrase === n.password;
+  if (!keyOk) {
+    // The engine deletes the profile of a network whose key ConnMan rejects.
+    n.saved = false;
+    return "wrong_password";
+  }
+  n.saved = true;
+  wifi.connected = n.ssid;
+  return "connected";
+}
+
+function wifiForget(ssid: string, security: number): WifiForgetOutcome {
+  const wifi = mockWifi();
+  const n = wifi.networks.find(
+    (x) => x.ssid === ssid && x.security === security && x.saved,
+  );
+  if (!n || !wifi.enabled) return "out_of_range";
+  n.saved = false;
+  if (wifi.connected === n.ssid) wifi.connected = null;
+  return "forgotten";
+}
+
+/** Tests start each case from the seeded Wi-Fi. */
+export function resetMockWifi() {
+  seeded = null;
+}
 
 /** Mirrors `sim_restart`: the restart fallback instead of the HID channel. */
 function restartMode(): boolean {
@@ -448,6 +599,14 @@ export async function mockInvoke(
       const sha = args.sha256 as string;
       await sleep(150);
       const patch = args.options as PlayerOptionsPatch;
+      // Like the backend's `deny_unknown_fields`: a misspelled option is an error.
+      const unknown = Object.keys(patch).find(
+        (k) => k !== "size" && k !== "output_gain",
+      );
+      if (unknown !== undefined)
+        throw new Error(
+          `invalid args \`options\` for command \`unit_set_options\`: unknown field \`${unknown}\``,
+        );
       models = models.map((m) => {
         if (m.sha256 !== sha) return m;
         const options = { ...m.options };
@@ -455,10 +614,37 @@ export async function mockInvoke(
           const value = patch[key];
           if (value !== undefined) options[key] = value ?? undefined;
         }
-        return { ...m, options };
+        // The helper drops invalid kept values on save, so the entry is valid again.
+        return { ...m, options, options_invalid: false };
       });
       return null;
     }
+    case "wifi_state":
+      wifiReachable();
+      await sleep(300);
+      return wifiState(args.withNetworks as boolean);
+    case "wifi_scan":
+      wifiReachable();
+      await sleep(2500);
+      return wifiNetworks();
+    case "wifi_set_enabled":
+      wifiReachable();
+      await sleep(1200);
+      wifiSetEnabled(args.on as boolean);
+      return wifiState(false);
+    case "wifi_join": {
+      wifiReachable();
+      if (flag("wifi") === "silent") {
+        await sleep(6000);
+        return "no_response";
+      }
+      await sleep(2500);
+      return wifiJoin(args.join as WifiJoin);
+    }
+    case "wifi_forget":
+      wifiReachable();
+      await sleep(600);
+      return wifiForget(args.ssid as string, args.security as number);
     case "settings_get":
       return settings;
     case "settings_set": {
@@ -489,6 +675,7 @@ export async function mockInvoke(
       linked = true;
       return "riffwright";
     }
+    case "open_lan_guide":
     case "t3k_open_link_again":
     case "t3k_open_site":
     case "sd_open_privacy_settings":

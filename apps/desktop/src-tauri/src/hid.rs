@@ -1,7 +1,7 @@
 //! The unit's application channel: `FenderMessageTMS` protobufs over the Linux USB HID
 //! gadget (VID/PID `0x1ED8`/`0x44`, 64-byte reports), the transport Pro Control uses.
 //!
-//! Only the `UserIR` family is spoken here. Adding an IR this way goes through
+//! The `UserIR` family is spoken here and `WifiMessage` in `wifi.rs`. Adding an IR this way goes through
 //! `tm-stomp-server` itself: it writes `/data/userIRs/<name>.wav`, appends the name to
 //! its in-memory library, replies `UserIRAdded` and persists `userIRs.json` — no engine
 //! restart. A message is capped at 65,535 bytes, so a NAM file (~300 KB) can't ride it:
@@ -23,6 +23,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::console::{TMP_PID, TMP_VID};
+use crate::proto::{bytes_field, get_bytes, get_varint, nested, parse, varint_field, Val};
 
 const FRAME_START: u8 = 0x33;
 const FRAME_CONTINUE: u8 = 0x34;
@@ -30,107 +31,6 @@ const FRAME_FINAL: u8 = 0x35;
 const FRAME_PAYLOAD: usize = 60;
 const MESSAGE_MAX: usize = 65_535;
 const HEARTBEAT_EVERY: Duration = Duration::from_millis(250);
-
-// ─── protobuf (hand-rolled: a dozen fields, no schema compiler) ─────────────────────
-
-fn put_varint(out: &mut Vec<u8>, mut n: u64) {
-    loop {
-        let b = (n & 0x7f) as u8;
-        n >>= 7;
-        if n == 0 {
-            out.push(b);
-            return;
-        }
-        out.push(b | 0x80);
-    }
-}
-
-fn varint_field(out: &mut Vec<u8>, field: u32, value: u64) {
-    put_varint(out, u64::from(field) << 3);
-    put_varint(out, value);
-}
-
-fn bytes_field(out: &mut Vec<u8>, field: u32, value: &[u8]) {
-    put_varint(out, (u64::from(field) << 3) | 2);
-    put_varint(out, value.len() as u64);
-    out.extend_from_slice(value);
-}
-
-fn nested(field: u32, inner: &[u8]) -> Vec<u8> {
-    let mut out = Vec::new();
-    bytes_field(&mut out, field, inner);
-    out
-}
-
-#[derive(Debug, Clone, PartialEq)]
-enum Val {
-    Varint(u64),
-    Bytes(Vec<u8>),
-    Fixed,
-}
-
-fn read_varint(buf: &[u8], pos: &mut usize) -> Option<u64> {
-    let mut n = 0u64;
-    for shift in (0..64).step_by(7) {
-        let b = *buf.get(*pos)?;
-        *pos += 1;
-        n |= u64::from(b & 0x7f) << shift;
-        if b & 0x80 == 0 {
-            return Some(n);
-        }
-    }
-    None
-}
-
-/// `(field, value)` pairs; stops at the first malformed field.
-fn parse(buf: &[u8]) -> Vec<(u32, Val)> {
-    let mut out = Vec::new();
-    let mut pos = 0;
-    while pos < buf.len() {
-        let Some(tag) = read_varint(buf, &mut pos) else {
-            break;
-        };
-        let field = (tag >> 3) as u32;
-        let val = match tag & 7 {
-            0 => match read_varint(buf, &mut pos) {
-                Some(v) => Val::Varint(v),
-                None => break,
-            },
-            1 | 5 => {
-                pos += if tag & 7 == 1 { 8 } else { 4 };
-                Val::Fixed
-            }
-            2 => {
-                let Some(len) = read_varint(buf, &mut pos) else {
-                    break;
-                };
-                let Some(end) = pos.checked_add(len as usize).filter(|e| *e <= buf.len()) else {
-                    break;
-                };
-                let v = buf[pos..end].to_vec();
-                pos = end;
-                Val::Bytes(v)
-            }
-            _ => break,
-        };
-        out.push((field, val));
-    }
-    out
-}
-
-fn get_bytes(fields: &[(u32, Val)], field: u32) -> Option<&[u8]> {
-    fields.iter().find_map(|(f, v)| match v {
-        Val::Bytes(b) if *f == field => Some(b.as_slice()),
-        _ => None,
-    })
-}
-
-fn get_varint(fields: &[(u32, Val)], field: u32) -> Option<u64> {
-    fields.iter().find_map(|(f, v)| match v {
-        Val::Varint(n) if *f == field => Some(*n),
-        _ => None,
-    })
-}
 
 // ─── FenderMessageTMS builders ──────────────────────────────────────────────────────
 
@@ -147,7 +47,7 @@ fn request(family: u32, kind: u32, value: u64, batch: Option<u64>) -> Vec<u8> {
 
 const CONNECTION: u32 = 4;
 const PRESET: u32 = 2;
-const SETTINGS: u32 = 3;
+pub(crate) const SETTINGS: u32 = 3;
 const USER_IR: u32 = 13;
 
 fn connection_request() -> Vec<u8> {
@@ -378,10 +278,10 @@ impl HidSession {
     pub fn handshake(&mut self) -> Result<(), String> {
         for (msg, ms) in handshake() {
             self.send(&msg)?;
-            self.pump(Duration::from_millis(ms))?;
+            self.drain(Duration::from_millis(ms))?;
         }
         // Let the handshake's streams (preset lists, ~17 KB product profile) finish.
-        self.pump(Duration::from_millis(1500))?;
+        self.drain(Duration::from_millis(1500))?;
         Ok(())
     }
 
@@ -392,10 +292,15 @@ impl HidSession {
             .send(msg)
     }
 
-    /// Read for `d`; returns the `UserIR` events received, or the transport error.
-    fn pump(&mut self, d: Duration) -> Result<Vec<UserIrEvent>, String> {
+    /// Read and drop whatever arrives for `d`, heartbeating.
+    fn drain(&mut self, d: Duration) -> Result<(), String> {
         let deadline = Instant::now() + d;
-        let mut out = Vec::new();
+        while self.next_message(deadline)?.is_some() {}
+        Ok(())
+    }
+
+    /// The next reassembled message, or `None` at `deadline`.
+    fn next_message(&mut self, deadline: Instant) -> Result<Option<Vec<u8>>, String> {
         let mut buf = [0u8; 64];
         while Instant::now() < deadline {
             let n = {
@@ -409,12 +314,50 @@ impl HidSession {
                     .read_timeout(&mut buf, 20)
                     .map_err(|e| format!("HID read: {e}"))?
             };
-            if let Some(ev) = self.rx.push(&buf[..n]).and_then(|m| user_ir_event(&m)) {
-                log::debug!("hid <- {ev:?}");
-                out.push(ev);
+            if let Some(m) = self.rx.push(&buf[..n]) {
+                return Ok(Some(m));
             }
         }
-        Ok(out)
+        Ok(None)
+    }
+
+    /// Drop what the engine sent while nobody was reading (broadcasts queue up between
+    /// requests), so it can't be taken as the reply to the next one.
+    fn discard_queued(&mut self) -> Result<(), String> {
+        let mut buf = [0u8; 64];
+        loop {
+            let n = self
+                .link
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .dev
+                .read_timeout(&mut buf, 0)
+                .map_err(|e| format!("HID read: {e}"))?;
+            if n == 0 {
+                return Ok(());
+            }
+            // Through the reassembler, so a message split across the cut stays whole.
+            self.rx.push(&buf[..n]);
+        }
+    }
+
+    /// Send `msg`, then read for up to `d` until `want` accepts a message. `Ok(None)`
+    /// when nothing matched in time; `Err` only for a transport failure.
+    pub(crate) fn exchange<T>(
+        &mut self,
+        msg: &[u8],
+        d: Duration,
+        mut want: impl FnMut(&[u8]) -> Option<T>,
+    ) -> Result<Option<T>, String> {
+        self.discard_queued()?;
+        self.send(msg)?;
+        let deadline = Instant::now() + d;
+        while let Some(m) = self.next_message(deadline)? {
+            if let Some(v) = want(&m) {
+                return Ok(Some(v));
+            }
+        }
+        Ok(None)
     }
 
     /// Send `msg` and wait up to `d` for the first `UserIR` event `want` accepts.
@@ -424,20 +367,19 @@ impl HidSession {
         d: Duration,
         want: impl Fn(&UserIrEvent) -> bool,
     ) -> Result<UserIrEvent, String> {
-        self.send(msg)?;
-        let deadline = Instant::now() + d;
         let mut seen = Vec::new();
-        while Instant::now() < deadline {
-            for ev in self.pump(Duration::from_millis(100))? {
-                if want(&ev) {
-                    return Ok(ev);
-                }
-                seen.push(ev);
+        let found = self.exchange(msg, d, |m| {
+            let ev = user_ir_event(m)?;
+            log::debug!("hid <- {ev:?}");
+            if want(&ev) {
+                return Some(ev);
             }
-        }
-        Err(format!(
-            "no matching UserIR reply in {d:?}; other UserIR events: {seen:?}"
-        ))
+            seen.push(ev);
+            None
+        })?;
+        found.ok_or_else(|| {
+            format!("no matching UserIR reply in {d:?}; other UserIR events: {seen:?}")
+        })
     }
 
     /// The library as the server holds it (`userIRListRequest`, no batch).

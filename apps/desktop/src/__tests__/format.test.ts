@@ -23,6 +23,7 @@ const capture = (
   present: true,
   info,
   options: {},
+  options_invalid: false,
   ...extra,
 });
 

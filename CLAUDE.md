@@ -16,7 +16,7 @@ or binary-analysis code here; `scripts/check.sh` enforces that with a grep.
 | Desktop app UI (React/TS; TMP NAM design system in `src/ds`, tokens in `src/theme/tokens.css`) | `apps/desktop/src/App.tsx`, `apps/desktop/src/views/`, app store in `src/state/` |
 | Design source of truth (spec, tokens, screens, prototype from Claude Design) | `apps/desktop/design/HANDOFF.md` |
 | App icon (gain knob): bundled files / sources and regeneration | `apps/desktop/src-tauri/icons/` / `apps/desktop/design/icons/` (never `tauri icon`) |
-| App backend: unit console, captures, Tone3000, settings | `apps/desktop/src-tauri/src/{console,unit,t3k,variants,settings}.rs`, `unit_helper.py` |
+| App backend: unit console, captures, Tone3000, Wi-Fi, settings | `apps/desktop/src-tauri/src/{console,unit,hid,wifi,t3k,variants,settings}.rs`, `unit_helper.py` |
 | SD-card builder | `crates/sdcard/src/` — `lib.rs` pipeline, `cli.rs` commands |
 | Everything copied onto the card + all pins | `device/`, `device/release.json` |
 | NAM player source and ARM build | `player/`; `docs/nam-player.md` |
@@ -27,12 +27,12 @@ or binary-analysis code here; `scripts/check.sh` enforces that with a grep.
 ## Commands
 
 ```bash
-scripts/check.sh quick                     # syntax + helper tests + release-pin integrity + no-exploit grep
+scripts/check.sh quick                     # syntax + helper tests + rustfmt + release-pin integrity + no-exploit grep
 scripts/check.sh all                       # + cargo test/clippy -D warnings + desktop typecheck/lint/vitest
 cargo test --workspace                     # Rust (crates/sdcard + app backend, incl. pty console tests)
 cargo test -p tmp-sdcard --test release    # device/ assets, player sources, licenses vs release.json
-cd apps/desktop && bun run tauri dev       # TMP_NAM_SIM=1 → simulated unit (TMP_NAM_SIM_FAIL=disconnect|restart|drop, TMP_NAM_SIM_RESTART=1)
-cd apps/desktop && bun run dev             # browser + mock; ?fail= ?flags=1 ?t3k= ?sd= reach error screens (src/lib/mock.ts)
+cd apps/desktop && bun run tauri dev       # TMP_NAM_SIM=1 → simulated unit (TMP_NAM_SIM_FAIL=disconnect|restart|drop, TMP_NAM_SIM_RESTART=1, TMP_NAM_SIM_WIFI=off|noradio|nohid|fender|silent|differs)
+cd apps/desktop && bun run dev             # browser + mock; ?fail= ?flags=1 ?t3k= ?sd= ?wifi= reach error screens (src/lib/mock.ts)
 node apps/desktop/scripts/gen-tokens.mjs   # regenerate src/theme/tokens.css after editing tokens.json
 cargo run --release -p tmp-sdcard -- image <ToneMasterPro_v1_8_58.img> <new.img>
 ```
@@ -96,7 +96,7 @@ slot) deletes entry and file. The engine drops a HID client after 0.75 s without
 then ignores it silently (heartbeat thread + in-pump heartbeat); the session is kept open for
 the connection because macOS refuses exclusive re-opens for tens of seconds after a close.
 The engine persists `userIRs.json` ~0.5–0.8 s after a change; never edit it while HID-added
-changes are pending (both writers use `userIRs.json.tmp`). Fallback when HID can't open (Pro
+changes are pending (both writers use `userIRs.json.tmp`). Settings › Wi-Fi uses the same HID session (`wifi.rs`, `WifiMessage`): the engine drives ConnMan, the passphrase travels only in the connect message, and `wifiEnable` acts only when it differs from the stored `wifiEnabled` (applied at every engine start), so a radio that disagrees with the stored value takes the opposite value first. Fallback when HID can't open (Pro
 Control holds it, no hidraw access): register the IR name before the file lands (the firmware
 prunes unregistered files), then one `systemctl restart tm-stomp-server` reloads the picker. Never
 stop/start it separately: `fmic-platform-ready.target` is `BindsTo=` the server and the UI
@@ -117,13 +117,9 @@ A2 sizes and output gain go in
 Option writes initialize a missing file and refuse unreadable settings. Malformed
 JSON/structure is backed up to a unique `player.json.invalid.*` file before recovery;
 the Inspector displays the returned warning. An invalid selected entry is reset
-without changing other entries. Option patches omit fields to keep them, use null
-to remove overrides, and numbers to set them (`opts` helper: `=`, `-`, number).
-The Inspector patches only size, never a cached gain. Lists return models plus an
-optional `settings_error`, shown on Captures without repairing the file. Invalid
-listed size/gain values are omitted with a warning so they cannot break list
-decoding. An empty option patch is a no-op, including on malformed settings.
-See `docs/nam-player.md` for recovery details.
+without changing other entries. Option patches (`opts` helper): `=` keeps a value,
+`-` removes it, a number sets it. `list` returns an optional `settings_error` for an
+unreadable or malformed file. See `docs/nam-player.md` for recovery details.
 
 Sends and installs never fail as a whole: `Unit::add` returns an `AddOutcome` (added, not
 loaded, interrupted, not sent, stop reason, `needs_restart` when the fallback ran) and streams

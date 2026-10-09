@@ -728,6 +728,11 @@
 .tn-sheet-foot .tn-sheet-extra {
   margin-right: auto;
 }
+.tn-sheet-note {
+  margin-right: auto;
+  font-size: 12px;
+  color: var(--text-3);
+}
 
 /* Sidebar */
 .tn-sidebar {
@@ -907,4 +912,161 @@
   justify-content: center;
   color: var(--text-2);
   margin-top: -2px;
+}
+
+/* Switch */
+.tn-switch-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: none;
+}
+.tn-switch {
+  position: relative;
+  width: 32px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  background: var(--bg-control);
+  box-shadow: inset 0 0 0 1px var(--border);
+  cursor: default;
+  transition: background 0.15s;
+}
+.tn-switch.is-on {
+  background: var(--accent);
+  box-shadow: none;
+}
+.tn-switch:focus-visible {
+  outline: none;
+  box-shadow: var(--focus);
+}
+.tn-switch:disabled {
+  opacity: 0.5;
+}
+.tn-switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text);
+  transition: transform 0.15s;
+}
+.tn-switch.is-on .tn-switch-knob {
+  transform: translateX(14px);
+  background: var(--text-on-accent);
+}
+
+/* Signal strength */
+.tn-signal {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: none;
+  color: var(--text-2);
+}
+.tn-signal svg {
+  fill: none;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+}
+.tn-signal-bar {
+  stroke: var(--text-disabled);
+  fill: none;
+}
+circle.tn-signal-bar {
+  stroke: none;
+  fill: var(--text-disabled);
+}
+.tn-signal-bar.is-lit {
+  stroke: var(--text-2);
+}
+circle.tn-signal-bar.is-lit {
+  fill: var(--text-2);
+}
+.tn-signal.is-muted .tn-signal-bar.is-lit {
+  stroke: var(--text-disabled);
+}
+.tn-signal.is-muted circle.tn-signal-bar.is-lit {
+  fill: var(--text-disabled);
+}
+
+/* Grouped card (Wi-Fi status, network list) */
+.tn-card {
+  border: 1px solid var(--sep);
+  border-radius: var(--radius-card);
+  background: var(--bg-subtle);
+}
+
+/* Network list */
+.tn-netlist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.tn-netlist-msg {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  font-size: 13px;
+  color: var(--text-2);
+}
+.tn-netlist-msg.is-empty {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+}
+.tn-net {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 44px;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--sep);
+}
+.tn-net:last-child {
+  border-bottom: 0;
+}
+.tn-net-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.tn-net-name,
+.tn-net-caption {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.tn-net-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+.tn-net-caption {
+  font-size: 11px;
+  line-height: 14px;
+  color: var(--text-3);
+}
+.tn-net.is-muted .tn-net-name {
+  color: var(--text-disabled);
+}
+.tn-net-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: none;
+  white-space: nowrap;
+}
+.tn-net-note,
+.tn-net-joining {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 12px;
+  color: var(--text-3);
 }

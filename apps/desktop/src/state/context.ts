@@ -6,6 +6,7 @@ import type { AddOutcome, Capture, T3kPick, UnitInfo } from "../lib/api";
 import type { OpItem, OpKind, Operation } from "./operation";
 import type { SdStore } from "./sd";
 import type { T3kStore } from "./t3k";
+import type { WifiStore } from "./wifi";
 
 /** Something the app can send to the unit, kept to retry it. */
 export type Source =
@@ -67,6 +68,11 @@ export interface AppStore {
   dismissReselect: () => void;
   /** Why actions that would conflict are disabled, or null. */
   busyReason: string | null;
+  /**
+   * `busyReason`, or a running Wi-Fi request: for actions that use the unit (sends,
+   * installs, size, gain, removal), which would otherwise wait behind it.
+   */
+  unitBusyReason: string | null;
   results: Partial<Record<OpKind, OpResult>>;
   dismissResult: (kind: OpKind) => void;
   run: (kind: OpKind, sources: Source[]) => Promise<void>;
@@ -78,6 +84,7 @@ export interface AppStore {
 
   t3k: T3kStore;
   sd: SdStore;
+  wifi: WifiStore;
 }
 
 export const AppContext = createContext<AppStore | null>(null);

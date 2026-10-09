@@ -1,6 +1,6 @@
 // src/state/AppProvider.tsx — the app store: navigation, unit, captures, the one long
-// operation and its results, Tone3000 and the SD build. Above the page switch, so
-// pages can unmount while work keeps going.
+// operation and its results, Tone3000, the SD build and the unit's Wi-Fi. Above the
+// page switch, so pages can unmount while work keeps going.
 
 import {
   useCallback,
@@ -23,6 +23,7 @@ import { applyEvent, startOp, type OpKind, type Operation } from "./operation";
 import { useSdBuild } from "./sd";
 import { useT3k } from "./t3k";
 import { useUnitConnection } from "./unit";
+import { useWifi } from "./wifi";
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const [page, setPage] = useState<Section>("captures");
@@ -39,6 +40,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [results, setResults] = useState<Partial<Record<OpKind, OpResult>>>({});
   const t3k = useT3k();
   const sd = useSdBuild();
+  const wifi = useWifi();
+  const { reset: resetWifi } = wifi;
   const { deselect } = t3k;
 
   const connected = conn.status === "connected";
@@ -69,6 +72,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     );
   }, [connected, refreshCaptures]);
 
+  useEffect(() => {
+    if (!connected) defer(resetWifi);
+  }, [connected, resetWifi]);
+
   const busyReason = op
     ? "Available when the transfer finishes"
     : sd.phase === "running"
@@ -76,6 +83,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       : working
         ? "Available when the unit is ready"
         : null;
+  const unitBusyReason =
+    busyReason ??
+    (wifi.activity ? "Available when the Wi-Fi change finishes" : null);
 
   const run = useCallback(
     async (kind: OpKind, sources: Source[]) => {
@@ -222,6 +232,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setReselect(false);
       },
       busyReason,
+      unitBusyReason,
       results,
       dismissResult: (kind) => {
         setResults((r) => ({ ...r, [kind]: undefined }));
@@ -231,6 +242,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       unitCommand,
       t3k,
       sd,
+      wifi,
     }),
     [
       page,
@@ -247,12 +259,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       working,
       reselect,
       busyReason,
+      unitBusyReason,
       results,
       run,
       discard,
       unitCommand,
       t3k,
       sd,
+      wifi,
     ],
   );
 

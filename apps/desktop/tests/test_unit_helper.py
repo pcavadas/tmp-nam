@@ -84,8 +84,7 @@ class PlayerOptionsTests(unittest.TestCase):
                          {"output_gain": 3.0})
 
     def test_list_reports_invalid_settings_without_repairing_them(self):
-        for raw in (b"invalid", b"\xff", b'[]', b'{}', b'{"models":[]}',
-                    b'{"models":{"new-hash":null}}'):
+        for raw in (b"invalid", b"\xff", b'[]', b'{}', b'{"models":[]}'):
             with self.subTest(raw=raw):
                 self.path.write_bytes(raw)
                 self.assertIn("settings_error", self.listed())
@@ -104,7 +103,7 @@ class PlayerOptionsTests(unittest.TestCase):
         self.assertNotIn("settings_error", listed)
         self.assertEqual(listed["models"][0]["options"], {"output_gain": 4.0})
 
-    def test_invalid_listed_numbers_warn_without_hiding_captures_or_writing(self):
+    def test_invalid_listed_numbers_mark_the_capture_without_hiding_it_or_writing(self):
         for key, values in (("size", ["0.5", None, True, [], {}, -1, 2,
                                       float("nan"), float("inf")]),
                             ("output_gain", ["4", None, False, [], {}, -1, 9,
@@ -114,12 +113,37 @@ class PlayerOptionsTests(unittest.TestCase):
                     self.save({"models": {"new-hash": {key: value}}})
                     before = self.path.read_bytes()
                     listed = self.listed()
-                    self.assertIn("settings_error", listed)
+                    self.assertNotIn("settings_error", listed)
                     self.assertEqual(len(listed["models"]), 1)
                     self.assertEqual(listed["models"][0]["options"], {})
+                    self.assertIs(listed["models"][0]["options_invalid"], True)
                     # The reply must be strict JSON, including non-finite inputs.
                     json.dumps(listed, allow_nan=False)
                     self.assertEqual(self.path.read_bytes(), before)
+
+    def test_invalid_entry_marks_only_its_capture(self):
+        self.helper.IR_DIR = str(self.path.parent)
+        self.helper.INDEX = str(self.path.parent / "index.json")
+        for name in ("bad.nam.wav", "good.nam.wav"):
+            (self.path.parent / name).write_bytes(name.encode())
+        for entry in (None, [], "invalid", {"size": "0.5"}, {"output_gain": 9}):
+            with self.subTest(entry=entry):
+                self.save({"models": {"sha-bad": entry, "sha-good": {"size": 0},
+                                      "sha-gone": None}})
+                output = io.StringIO()
+                with mock.patch.object(self.helper, "registered_names", return_value=[]), \
+                        mock.patch.object(self.helper, "sha256_path",
+                                          side_effect=lambda p: "sha-" + Path(p).name[:-8]), \
+                        mock.patch.object(self.helper, "describe", return_value={}), \
+                        contextlib.redirect_stdout(output):
+                    self.helper.cmd_list([])
+                listed = json.loads(output.getvalue())
+                self.assertNotIn("settings_error", listed)
+                rows = {row["name"]: row for row in listed["models"]}
+                self.assertIs(rows["bad.nam"]["options_invalid"], True)
+                self.assertEqual(rows["bad.nam"]["options"], {})
+                self.assertNotIn("options_invalid", rows["good.nam"])
+                self.assertEqual(rows["good.nam"]["options"], {"size": 0})
 
     def test_list_accepts_zero_and_boundary_options(self):
         for size, gain in ((0, 0), (1, 8), (0.5, 4.0)):
@@ -183,6 +207,56 @@ class PlayerOptionsTests(unittest.TestCase):
                 self.assertEqual(json.loads(self.path.read_text(encoding="utf-8")), value)
                 self.assertTrue(any(p.read_bytes() == before for p in
                                     self.path.parent.glob("player.json.invalid.*")))
+
+    def test_invalid_kept_options_are_dropped_with_a_backup(self):
+        for kept, size, gain, value, expected in (
+                ("output_gain", "0", "=", "4", {"size": 0.0}),
+                ("output_gain", "0", "=", 9, {"size": 0.0}),
+                ("output_gain", "0", "=", True, {"size": 0.0}),
+                ("output_gain", "-", "=", None, {}),
+                ("size", "=", "2", 2, {"output_gain": 2.0}),
+                ("size", "=", "2", -1, {"output_gain": 2.0})):
+            with self.subTest(kept=kept, value=value):
+                for backup in self.path.parent.glob("player.json.invalid.*"):
+                    backup.unlink()
+                self.save({"models": {"new-hash": {kept: value, "sample_rate_hz": 48000},
+                                      "other": {"output_gain": "x"}}})
+                before = self.path.read_bytes()
+                result = self.options(size=size, gain=gain)
+                expected = dict(expected, sample_rate_hz=48000)
+                self.assertEqual(result["options"], expected)
+                label = "output gain" if kept == "output_gain" else kept
+                self.assertIn("Invalid %s for this capture was removed." % label,
+                              result["warning"])
+                saved = json.loads(self.path.read_text(encoding="utf-8"))["models"]
+                self.assertEqual(saved["new-hash"], expected)
+                # Other captures' entries are left as they were.
+                self.assertEqual(saved["other"], {"output_gain": "x"})
+                backups = list(self.path.parent.glob("player.json.invalid.*"))
+                self.assertEqual([p.read_bytes() for p in backups], [before])
+
+    def test_replaced_invalid_options_are_backed_up(self):
+        for key, size, gain, expected in (
+                ("size", "0.5", "=", {"size": 0.5}),
+                ("output_gain", "=", "2", {"output_gain": 2.0})):
+            with self.subTest(key=key):
+                for backup in self.path.parent.glob("player.json.invalid.*"):
+                    backup.unlink()
+                self.save({"models": {"new-hash": {key: "bad"}}})
+                before = self.path.read_bytes()
+                result = self.options(size=size, gain=gain)
+                self.assertEqual(result["options"], expected)
+                label = "output gain" if key == "output_gain" else key
+                self.assertIn("Invalid saved %s for this capture was replaced." % label,
+                              result["warning"])
+                backups = list(self.path.parent.glob("player.json.invalid.*"))
+                self.assertEqual([p.read_bytes() for p in backups], [before])
+
+    def test_valid_kept_options_need_no_recovery(self):
+        self.save({"models": {"new-hash": {"output_gain": 8}}})
+        self.assertEqual(self.options(size="0", gain="="),
+                         {"options": {"output_gain": 8, "size": 0.0}})
+        self.assertEqual(list(self.path.parent.glob("player.json.invalid.*")), [])
 
     def test_repeated_recovery_preserves_existing_backups(self):
         self.path.write_bytes(b'first invalid file')

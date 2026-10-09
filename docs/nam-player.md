@@ -69,7 +69,9 @@ structure, the desktop first saves the exact old bytes in a uniquely named
 `/data/nam/player.json.invalid.*` backup, then atomically saves a fresh settings
 file containing the requested options. Other captures revert to defaults. If
 only the selected capture's entry is not an object, it resets that entry while
-preserving other entries and top-level fields. The Inspector warns that recovery
+preserving other entries and top-level fields. An invalid size or gain in the
+selected capture's entry is dropped, or replaced when the change sets it, and
+the file is backed up the same way. The Inspector warns that recovery
 occurred and shows the backup path. Earlier backups are never overwritten; a
 failed backup or save leaves the original settings in place and reports an error.
 Reselect the capture on the unit to load the saved options.
@@ -85,12 +87,14 @@ stored on the unit, including edits made over SSH since the last refresh. Select
 Full removes the size override without removing gain or other fields.
 
 Listing captures does not repair settings; recovery happens on an option write.
-If existing settings cannot be read or parsed, have an invalid object structure,
-or a listed capture has an invalid size/gain value, the Captures page warns that
-listed options are unreliable and leaves the size picker without a selected value. A missing settings file uses defaults without a
-warning. Use **Refresh settings** after correcting the file to show the current
-options. Listing does not validate every player setting; a warning is not an
-automatic repair of invalid numeric values. Correct these via the console or SSH.
+If existing settings cannot be read or parsed, or have an invalid top-level/models
+structure, the Captures page shows a warning and leaves every size picker without
+a selected value. A missing settings file uses defaults without a warning. Use
+**Refresh settings** after correcting the file to show the current options. If
+only one capture's entry is not an object or has an invalid size/gain value, only
+that capture's size picker is left without a selection. Choosing a size for it
+saves the new size and removes the invalid size/gain value, backing up the file
+first as above. Listing does not validate every player setting.
 
 For a `SlimmableContainer`, upstream uses exclusive `max_value` thresholds;
 size is a selector rather than a percentage. Missing rate metadata requires an

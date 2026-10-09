@@ -62,23 +62,11 @@
       "bytes": 333032,
       "sha256": "f2c142f1b596f49639cc54fad61ecc1d28069b0806a70c0def219445014b39b0"
     },
-    "wifi_setup": {
-      "source": "scripts/wifi-always-on.sh",
-      "target": "usr/local/bin/wifi-always-on.sh",
-      "bytes": 766,
-      "sha256": "3b79aab5f3379ef806bbb30b79148784699b4e202d875a89bfa48caa327426bc"
-    },
-    "wifi_service": {
-      "source": "systemd/wifi-always-on.service",
-      "target": "etc/systemd/system/wifi-always-on.service",
-      "bytes": 338,
-      "sha256": "77d514fdcb5bcdffbf21236d4e9bd156aa48ba4f1493436605c96ae2de4ba118"
-    },
     "dropbear_service": {
       "source": "systemd/dropbear-nam.service",
       "target": "etc/systemd/system/dropbear-nam.service",
-      "bytes": 330,
-      "sha256": "68b5f4a3b4c00890f039487834f7decfb066c3aed3fbe6feb99ae796e350a3db"
+      "bytes": 284,
+      "sha256": "912eeab2879050328352ec15c06117aa0f135cfd980b27cc0fbb96490cc35715"
     },
     "t3k": {
       "source": "helpers/t3k_sync.py",

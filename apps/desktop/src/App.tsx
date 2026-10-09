@@ -15,6 +15,7 @@ import { defer } from "./lib/format";
 import { AppProvider } from "./state/AppProvider";
 import { useApp } from "./state/context";
 import { activity } from "./state/operation";
+import { wifiActivityCard } from "./state/wifi";
 import { STAGES } from "./state/sd";
 import { CapturesPage } from "./views/captures/CapturesPage";
 import { SdCardPage } from "./views/sdcard/SdCardPage";
@@ -113,7 +114,9 @@ function Shell() {
   const [asking, quit, keep] = useCloseGuard(running);
 
   let current: Activity | null = null;
+  const wifiCard = wifiActivityCard(app.wifi.activity);
   if (app.op) current = activity(app.op);
+  else if (wifiCard) current = wifiCard;
   else if (sd.phase === "running")
     current = {
       title: "Creating SD card",

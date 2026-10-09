@@ -231,8 +231,6 @@ pub fn apply(
 
     copy_asset(rootfs, device, &assets.dropbear, 0o755)?;
     copy_asset(rootfs, device, &assets.dropbearkey, 0o755)?;
-    copy_asset(rootfs, device, &assets.wifi_setup, 0o755)?;
-    copy_asset(rootfs, device, &assets.wifi_service, 0o644)?;
     copy_asset(rootfs, device, &assets.dropbear_service, 0o644)?;
     copy_asset(rootfs, device, &assets.t3k, 0o755)?;
     write_new_file(
@@ -254,11 +252,7 @@ pub fn apply(
         rootfs.join(LAN_SERVICE_DROPIN).parent().expect("parent"),
         0o755,
     )?;
-    for service in [
-        &assets.wifi_service.target,
-        &assets.dropbear_service.target,
-        &layout.lan_service_target,
-    ] {
+    for service in [&assets.dropbear_service.target, &layout.lan_service_target] {
         let service = Path::new(service);
         let name = service
             .file_name()

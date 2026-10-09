@@ -21,7 +21,6 @@ Boot a Fender Tone Master Pro (firmware **1.8.58 only**) from an SD card with a 
 | `bin/nam_dispatch.so` | NAM player, preloaded into the stock audio engine. Single-channel A1/A2, Speex resampling for 48 kHz models (firmware runs **44.1 kHz**), prepare-before-handoff, per-capture size and output gain. |
 | `bin/dropbear`, `bin/dropbearkey` | Static AArch64 SSH server + key generator, staged onto `/data/nam/bin` at boot. |
 | `systemd/usb-console.service`, `scripts/usb_console_setup.sh` | CDC-ACM root console over the stock USB-C cable. |
-| `systemd/wifi-always-on.service`, `scripts/wifi-always-on.sh` | Powers Wi-Fi after the engine starts. |
 | `systemd/dropbear-nam.service` | SSH on the LAN. |
 | `helpers/register_nam_ir.py`, `helpers/t3k_sync.py` | User-IR registry helper; on-device Tone3000 pull (the Wi-Fi/SSH fallback to the app). |
 
@@ -83,9 +82,6 @@ boot it — try another reader/adapter, then another card.
    done
    systemctl show tm-stomp-server tone-master-stomp-client \
        -p ActiveState -p SubState -p NRestarts -p FragmentPath -p DropInPaths
-   systemctl show wifi-always-on -p Type -p ActiveState -p SubState
-   # Type=simple; active/running during the script, then active/exited
-   sha256sum /etc/systemd/system/wifi-always-on.service
    ```
 4. Add a NAM capture from the app (Captures or Tone3000), then select it in the
    User IR picker **after** the preset screen is up. It should play as a gained amp.
@@ -130,11 +126,12 @@ Notes that will save you time:
 
 ## 6. Wi-Fi + SSH (no computer needed)
 
-The card powers Wi-Fi and starts SSH automatically. Network association is a
-separate prerequisite for pushing `.nam` files:
+The card starts SSH automatically. Joining a network is a separate
+prerequisite for pushing `.nam` files:
 
-1. Join your Wi-Fi **once** (factory-test UI → Wi-Fi Test at power-on, or Pro
-   Control). ConnMan remembers it; the card auto-joins on later boots.
+1. Join your Wi-Fi **once** from TMP NAM → Settings → Wi-Fi (or the factory-test
+   UI's Wi-Fi Test: hold the top-left footswitch at power-on). The unit keeps
+   Wi-Fi on and rejoins saved networks on later boots until you turn it off.
 2. On each boot the LAN installer atomically refreshes `dropbear`, `dropbearkey`, `t3k_sync.py` and `register_nam_ir.py` under internal `/data` to match the card. SSH requires a successful installation. Existing host keys, models, settings and tokens remain; a missing host key is generated on-device. Connect with `ssh root@fmic-tm-pro.local` (blank password until you set one — do not expose port 22 beyond your LAN).
 3. Push a capture straight into the User IR store:
    ```sh

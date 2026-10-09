@@ -29,10 +29,10 @@ export function resultBanner(
   const send = r.kind === "send";
   const noun = "capture";
   const sent = n - remaining(r).length;
-  const blocked = !app.connected || app.busyReason !== null;
+  const blocked = !app.connected || app.unitBusyReason !== null;
   const why = !app.connected
     ? "Connect the unit first"
-    : (app.busyReason ?? undefined);
+    : (app.unitBusyReason ?? undefined);
   const rest = remaining(r);
   // Discarding reloads the engine when the restart fallback sent files before the
   // unplug.
@@ -116,7 +116,7 @@ export function resultBanner(
             retry,
             {
               label: dropped.length === 1 ? "Remove It" : "Remove Them",
-              disabled: app.busyReason !== null,
+              disabled: app.unitBusyReason !== null,
               onClick: () => {
                 for (const d of dropped) extra.remove?.(d);
               },

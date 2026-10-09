@@ -52,10 +52,10 @@ export function CapturesPage({ narrow }: { narrow: boolean }) {
     : [];
   const sel = rows.find((r) => r.name === selected) ?? rows[0] ?? null;
   const canAdd =
-    app.connected && app.busyReason === null && app.unit !== "busy";
+    app.connected && app.unitBusyReason === null && app.unit !== "busy";
   const addHint = !app.connected
     ? "Connect the unit first"
-    : (app.busyReason ?? undefined);
+    : (app.unitBusyReason ?? undefined);
 
   const openAdd = async () => {
     const paths = await pickFiles(NAM_FILTER, true);
@@ -212,9 +212,8 @@ export function CapturesPage({ narrow }: { narrow: boolean }) {
               },
             ]}
           >
-            {app.settingsError} Listed options may be unavailable or invalid.
-            Refresh after checking the settings file. Size changes preserve any
-            gain that can be read when saving.
+            {app.settingsError} Capture sizes can&apos;t be shown until that
+            file is fixed. Refresh once it is.
           </Banner>
         </div>
       )}
