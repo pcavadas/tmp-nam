@@ -2,28 +2,31 @@
 
 Card creation and boot checks are in [the SD-card guide](../sd-card.md). The **TMP NAM** desktop app manages captures and Tone3000 sync over the USB cable and needs none of this; Wi-Fi + SSH is the computer-free path (an SSH app on a phone works). Maintainer compilation and publication are described in [BUILDING.md](../../BUILDING.md).
 
-Stock 1.8.58 has ConnMan and an RTL8822CU Wi-Fi/Bluetooth radio but no SSH daemon. The normal device UI has no Wi-Fi screen; the factory-test app can toggle the radio. Avahi advertises `_ssh._tcp` even without a daemon listening.
+Stock 1.8.58 has ConnMan and an RTL8822CU Wi-Fi/Bluetooth radio but no SSH daemon. The normal device UI has no Wi-Fi screen. Avahi advertises `_ssh._tcp` even without a daemon listening.
 
-The card configures Wi-Fi power after `tm-stomp-server` starts, Dropbear SSH under internal `/data`, and TONE3000 downloads into the User IR store. Network association is a separate prerequisite.
+The card adds Dropbear SSH under internal `/data` and TONE3000 downloads into the User IR store. Joining a network is a separate step.
 
-## 1. First join
+## 1. Join a network
 
-ConnMan cannot auto-join a network it has never seen. Join once through either:
+Use **TMP NAM → Settings → Wi-Fi** with the unit connected over USB: turn Wi-Fi on, pick a network and enter its password. The app sends these requests to the audio engine over the USB HID channel (`WifiMessage`), and the engine drives ConnMan; nothing restarts. It lists open and WPA/WPA2 Personal networks as joinable; WEP, WPA/WPA2 Enterprise and WPA3-only networks are not supported by the firmware's Wi-Fi code. A hidden network is joined with **Other Network…** while it is in range.
 
-- Factory-test UI → Wi-Fi Test: hold the leftmost mag-encoder push at power-on (startup button mask `1`).
-- USB HID `WifiMessage` / `wifiConnect` from the host.
+Without the app, the factory-test UI has a Wi-Fi Test screen: hold the top-left footswitch (and nothing else) while powering on (startup button mask `1`).
 
-This writes `/var/lib/connman/wifi_*_managed_psk/` on internal eMMC `/data` (`Favorite=true`, `AutoConnect=true`) and sets `/data/settings.json` `wifiEnabled: true`. The passphrase stays in ConnMan's settings file; keep it out of version control.
+Joining writes `/var/lib/connman/wifi_*_managed_*/settings` on internal eMMC `/data` (`Favorite=true`, `AutoConnect=true`, the passphrase in plain text), and turning Wi-Fi on sets `/data/settings.json` `wifiEnabled: true`. A wrong password makes the engine delete that network's saved entry. **Forget** in the app deletes it too; it works only while the network is in range.
 
-## 2. Automatic Wi-Fi power
+## 2. Wi-Fi at boot
 
-The card builder installs `wifi-always-on.sh` and its systemd service in the SD root. No manual copy is needed. The unit runs after `tm-stomp-server` and sets Wi-Fi `Powered=true` over D-Bus for about 15 seconds so ConnMan can associate with a remembered network. Subsequent boots do not need the factory-test encoder gesture.
+The engine applies `/data/settings.json` `wifiEnabled` every time it starts, with or without the card: `true` powers the radio and ConnMan joins saved networks by itself, `false` (the default) powers it off. The app's on/off switch writes that setting.
+
+Saved networks and the setting live on internal `/data`, so the unit also rejoins them when it boots the stock firmware without the card.
+
+`/var/lib/connman/fenderupdate.config`, which a factory reset copies into `/data`, makes the unit join any WPA2 network named `FENDER_UPDATE` with Fender's published passphrase while Wi-Fi is on. The app warns when it is present.
+
+Check association from the USB console:
 
 ```sh
-systemctl status wifi-always-on.service
+dbus-send --system --print-reply --dest=net.connman / net.connman.Manager.GetServices
 ```
-
-A running Wi-Fi service does not itself prove association, an assigned address or remote connectivity.
 
 ## 3. Exact SSH and helper installation
 

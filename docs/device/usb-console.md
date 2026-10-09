@@ -19,7 +19,7 @@ by the operator.
 > the stock eMMC *root filesystem* on the next cold boot, but it does not undo
 > changes deliberately made under `/data` or to other internal storage.
 
-Wi-Fi auto-join, Dropbear SSH, and TONE3000 pull are baked in by the card builder
+Dropbear SSH and TONE3000 pull are baked in by the card builder
 (first-boot installer stages Dropbear onto `/data` and generates the SSH host
 key on-device). Background: [`lan-access.md`](lan-access.md).
 
