@@ -208,6 +208,39 @@ class PlayerOptionsTests(unittest.TestCase):
                 self.assertTrue(any(p.read_bytes() == before for p in
                                     self.path.parent.glob("player.json.invalid.*")))
 
+    def test_invalid_kept_options_are_dropped_with_a_backup(self):
+        for kept, size, gain, value, expected in (
+                ("output_gain", "0", "=", "4", {"size": 0.0}),
+                ("output_gain", "0", "=", 9, {"size": 0.0}),
+                ("output_gain", "0", "=", True, {"size": 0.0}),
+                ("output_gain", "-", "=", None, {}),
+                ("size", "=", "2", 2, {"output_gain": 2.0}),
+                ("size", "=", "2", -1, {"output_gain": 2.0})):
+            with self.subTest(kept=kept, value=value):
+                for backup in self.path.parent.glob("player.json.invalid.*"):
+                    backup.unlink()
+                self.save({"models": {"new-hash": {kept: value, "sample_rate_hz": 48000},
+                                      "other": {"output_gain": "x"}}})
+                before = self.path.read_bytes()
+                result = self.options(size=size, gain=gain)
+                expected = dict(expected, sample_rate_hz=48000)
+                self.assertEqual(result["options"], expected)
+                label = "output gain" if kept == "output_gain" else kept
+                self.assertIn("Invalid %s for this capture was removed." % label,
+                              result["warning"])
+                saved = json.loads(self.path.read_text(encoding="utf-8"))["models"]
+                self.assertEqual(saved["new-hash"], expected)
+                # Other captures' entries are left as they were.
+                self.assertEqual(saved["other"], {"output_gain": "x"})
+                backups = list(self.path.parent.glob("player.json.invalid.*"))
+                self.assertEqual([p.read_bytes() for p in backups], [before])
+
+    def test_valid_kept_options_need_no_recovery(self):
+        self.save({"models": {"new-hash": {"output_gain": 8}}})
+        self.assertEqual(self.options(size="0", gain="="),
+                         {"options": {"output_gain": 8, "size": 0.0}})
+        self.assertEqual(list(self.path.parent.glob("player.json.invalid.*")), [])
+
     def test_repeated_recovery_preserves_existing_backups(self):
         self.path.write_bytes(b'first invalid file')
         self.assert_recovered()

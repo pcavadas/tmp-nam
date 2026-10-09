@@ -606,7 +606,8 @@ export async function mockInvoke(
           const value = patch[key];
           if (value !== undefined) options[key] = value ?? undefined;
         }
-        return { ...m, options };
+        // The helper drops invalid kept values on save, so the entry is valid again.
+        return { ...m, options, options_invalid: false };
       });
       return null;
     }
