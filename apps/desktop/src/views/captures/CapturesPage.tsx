@@ -212,9 +212,8 @@ export function CapturesPage({ narrow }: { narrow: boolean }) {
               },
             ]}
           >
-            {app.settingsError} Listed options may be unavailable or invalid.
-            Refresh after checking the settings file. Size changes preserve any
-            gain that can be read when saving.
+            {app.settingsError} Capture sizes can&apos;t be shown until that
+            file is fixed. Refresh once it is.
           </Banner>
         </div>
       )}
