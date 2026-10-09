@@ -18,7 +18,6 @@ import {
   TextField,
 } from "../../ds";
 import {
-  api,
   SECURITY,
   type WifiJoin,
   type WifiNetwork,
@@ -26,6 +25,8 @@ import {
 } from "../../lib/api";
 import { copyText, defer } from "../../lib/format";
 import { useApp } from "../../state/context";
+import { sshExposure } from "../../state/ssh";
+import { SshAccess, SshNoticeBanner } from "./SshAccess";
 import {
   caption,
   networkKey,
@@ -53,10 +54,12 @@ function blockedReason(
   a: WifiActivity | null,
   transfer: boolean,
   working: boolean,
+  sshBusy: boolean,
 ): string | null {
   if (transfer) return TRANSFER;
   // A remove or a size/gain change holds the unit too.
   if (working) return "Available when the unit is ready";
+  if (sshBusy) return "Available when the SSH change finishes";
   switch (a?.kind) {
     case undefined:
       return null;
@@ -168,7 +171,13 @@ export function WifiSettings() {
     );
   }
 
-  const blocked = blockedReason(wifi.activity, transfer, app.working);
+  const exposure = sshExposure(app.ssh.state);
+  const blocked = blockedReason(
+    wifi.activity,
+    transfer,
+    app.working,
+    app.ssh.activity !== null,
+  );
   const showList =
     state.status.enabled &&
     !noRadio(state) &&
@@ -245,19 +254,9 @@ export function WifiSettings() {
           </Banner>
         )
       )}
+      {!transfer && <SshNoticeBanner />}
       <StatusCard wifi={wifi} state={state} blocked={blocked} />
-      {state.fender_update && state.status.enabled && (
-        <Banner
-          tone="warn"
-          title="This unit also joins Fender's update network"
-          style={{ marginTop: 16 }}
-        >
-          While Wi-Fi is on, it connects by itself to any network named
-          FENDER_UPDATE, using a password Fender has published. Someone nearby
-          could set up a network with that name and reach the card&apos;s SSH
-          login. Keep Wi-Fi off when you don&apos;t need it.
-        </Banner>
-      )}
+      {!noRadio(state) && <SshAccess />}
       {showList && (
         <Networks
           wifi={wifi}
@@ -278,6 +277,16 @@ export function WifiSettings() {
             starts without the NAM card.
           </li>
           <li>Forget removes a network and its password from the unit.</li>
+          {state.fender_update && (
+            <li>
+              <strong>Fender&apos;s update network.</strong>{" "}
+              {exposure === "old"
+                ? "While Wi-Fi is on, the unit can also join a network named FENDER_UPDATE by itself. With this card's open SSH, that's one more reason to create a new card."
+                : exposure === "none"
+                  ? "While Wi-Fi is on, the unit can also join a network named FENDER_UPDATE by itself, a Fender setting. With SSH set to No security, that's one more reason to switch back to Key only."
+                  : "While Wi-Fi is on, the unit can also join a network named FENDER_UPDATE by itself, a Fender setting. That's harmless while SSH access is off or key-only."}
+            </li>
+          )}
         </ul>
       </section>
       {sheet && (
@@ -317,6 +326,7 @@ function StatusCard({
   blocked: string | null;
 }) {
   const { status } = state;
+  const exposure = sshExposure(useApp().ssh.state);
   const a = wifi.activity;
   const radioMissing = noRadio(state);
   const switching = a?.kind === "switching" ? a : null;
@@ -429,20 +439,30 @@ function StatusCard({
             <dt>MAC address</dt>
             <dd className="mono">{status.mac || "—"}</dd>
           </dl>
-          <div className="wifi-row wifi-warn" role="note">
-            <span>
-              SSH is open on this network. Anyone on {name} can log in to the
-              NAM card as root, with a blank password until you set one or add a
-              key.
-            </span>
-            <Button
-              size="sm"
-              variant="plain"
-              onClick={() => void api.openLanGuide()}
-            >
-              How to secure it
-            </Button>
-          </div>
+          {exposure && (
+            <div className="wifi-row wifi-danger" role="note">
+              <span>
+                {exposure === "old" ? (
+                  <>
+                    <strong>
+                      Anyone on {name} can log in to the NAM card with no
+                      password.
+                    </strong>{" "}
+                    This card is too old for SSH access settings. See SSH access
+                    below.
+                  </>
+                ) : (
+                  <>
+                    <strong>
+                      Anyone on {name} has root access to the NAM card, with no
+                      password.
+                    </strong>{" "}
+                    SSH access is set to No security. See SSH access below.
+                  </>
+                )}
+              </span>
+            </div>
+          )}
         </>
       )}
       {differs && !switching && (
@@ -578,14 +598,22 @@ function Networks({
   );
 }
 
-function SshWarning({ name }: { name: string }) {
+/** Only when SSH lets anyone in: a card too old, or No security. */
+function SshDanger({ name }: { name: string }) {
+  const exposure = sshExposure(useApp().ssh.state);
+  if (!exposure) return null;
   return (
     <Banner
-      tone="warn"
-      title="Joining opens the card's SSH login to this network"
+      tone="error"
+      title={
+        name === "it"
+          ? "Anyone on that network could log in as root"
+          : `Anyone on ${name} could log in as root`
+      }
     >
-      Anyone on {name} can log in to the NAM card as root. It accepts a blank
-      password until you set one or add a key.
+      {exposure === "old"
+        ? "This card's SSH accepts a blank password. Create a new card in SD Card first, or join only networks you trust."
+        : "SSH access is set to No security. Switch it to Key only first, or join only networks you trust."}
     </Banner>
   );
 }
@@ -666,7 +694,7 @@ function WifiSheet({
             <p className="muted">
               {ssid} is open: it has no password, so anyone nearby can join it.
             </p>
-            <SshWarning name={ssid} />
+            <SshDanger name={ssid} />
             <p className="small muted3">
               The unit saves the network and rejoins it by itself whenever Wi-Fi
               is on. Joining can take up to 45 seconds.
@@ -754,7 +782,7 @@ function JoinSheet({
             setTried(false);
           }}
         />
-        <SshWarning name={ssid} />
+        <SshDanger name={ssid} />
         <p className="small muted3">
           The password goes to the unit over USB and is saved there,
           unencrypted. Joining can take up to 45 seconds.
@@ -867,7 +895,7 @@ function OtherSheet({
             }}
           />
         )}
-        <SshWarning name="it" />
+        <SshDanger name="it" />
         <button type="submit" hidden />
       </form>
     </Sheet>

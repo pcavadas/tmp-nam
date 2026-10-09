@@ -21,6 +21,8 @@
 //   ?wifi=off|noradio|nohid|fender|silent|differs   Wi-Fi off, no radio, HID channel held
 //                        by another app, FENDER_UPDATE profile present, a join
 //                        that gets no answer, saved setting Off while the radio is on
+//   ?ssh=old|keyfail|silent   card too old for SSH access, this Mac's key can't be
+//                        created, SSH requests get no answer
 
 import { ApiError, SECURITY } from "./api";
 import type {
@@ -32,7 +34,10 @@ import type {
   ModelInfo,
   OpEvent,
   SdEnvironment,
+  PublicKey,
   Settings,
+  SshMode,
+  SshState,
   T3kPick,
   T3kTone,
   Variant,
@@ -409,9 +414,85 @@ function wifiForget(ssid: string, security: number): WifiForgetOutcome {
   return "forgotten";
 }
 
-/** Tests start each case from the seeded Wi-Fi. */
+// ── SSH access (mirrors `SimSsh`) ──────────────────────────────────────────
+
+interface MockSsh {
+  state: SshState;
+  /** This computer's key, once "created". */
+  thisComputer: PublicKey | null;
+  /** Full lines of allowed keys, by fingerprint. */
+  lines: Map<string, string>;
+}
+
+let ssh: MockSsh | null = null;
+const mockSsh = (): MockSsh =>
+  (ssh ??= {
+    state: {
+      supported: flag("ssh") !== "old",
+      enabled: flag("ssh") === "old",
+      mode: flag("ssh") === "old" ? "none" : "key",
+      running: flag("ssh") === "old",
+      keys: [],
+    },
+    thisComputer: null,
+    lines: new Map(),
+  });
+
+const KEY_LINE =
+  /^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(?:256|384|521)) ([A-Za-z0-9+/]{20,}={0,2})(?: (.*))?$/;
+
+/** Mirrors `ssh::parse_key_text` closely enough for the mock (fake fingerprint). */
+function mockParseKey(text: string): PublicKey {
+  if (/PRIVATE KEY-----|PuTTY-User-Key-File/.test(text))
+    throw new ApiError("private_key", "private_key");
+  const lines = text.split("\n").filter((l) => l.trim());
+  if (lines.length > 1 && lines.every((l) => KEY_LINE.test(l.trim())))
+    throw new ApiError("several_lines", "several_lines");
+  const m = lines.length === 1 ? KEY_LINE.exec((lines[0] ?? "").trim()) : null;
+  const type = m?.[1];
+  const blob = m?.[2];
+  if (!type || !blob) throw new ApiError("not_a_key", "not_a_key");
+  let h = 0;
+  for (const c of blob) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  const fp = `SHA256:${btoa(String(h).repeat(5)).replace(/=+$/, "").slice(0, 43)}`;
+  const curve = Number(/\d+$/.exec(type)?.[0] ?? 256);
+  const bits = type === "ssh-rsa" ? 2048 : type === "ssh-ed25519" ? 256 : curve;
+  return { type, bits, comment: m[3] ?? "", fingerprint: fp };
+}
+
+const MOCK_MAC_KEY =
+  "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMockThisComputerKeyForTheBrowserOnly me@This-Mac";
+
+async function sshRequest<T>(ms: number, f: (s: MockSsh) => T): Promise<T> {
+  await sleep(ms);
+  if (flag("ssh") === "silent") {
+    await sleep(3000);
+    throw new ApiError("no_answer", "The unit didn't answer.");
+  }
+  const s = mockSsh();
+  if (!s.state.supported) throw new ApiError("card_too_old", "card_too_old");
+  return f(s);
+}
+
+function mockAllow(s: MockSsh, line: string): boolean {
+  const key = mockParseKey(line);
+  if (s.lines.has(key.fingerprint)) return false;
+  s.lines.set(key.fingerprint, line);
+  s.state.keys = [...s.state.keys, key];
+  return true;
+}
+
+function mockSshSet(s: MockSsh, enabled: boolean, mode: SshMode): SshState {
+  if (enabled && mode === "key" && s.state.keys.length === 0)
+    throw new ApiError("no_keys", "no_keys");
+  s.state = { ...s.state, enabled, mode, running: enabled };
+  return s.state;
+}
+
+/** Tests start each case from the seeded Wi-Fi and SSH. */
 export function resetMockWifi() {
   seeded = null;
+  ssh = null;
 }
 
 /** Mirrors `sim_restart`: the restart fallback instead of the HID channel. */
@@ -675,7 +756,60 @@ export async function mockInvoke(
       linked = true;
       return "riffwright";
     }
-    case "open_lan_guide":
+    case "ssh_state": {
+      await sleep(200);
+      const s = mockSsh();
+      return { ssh: s.state, this_computer: s.thisComputer };
+    }
+    case "ssh_create_key": {
+      await sleep(900);
+      if (flag("ssh") === "keyfail")
+        throw new ApiError(
+          "key_failed",
+          "~/.ssh/id_ed25519.pub: Permission denied",
+        );
+      const s = mockSsh();
+      s.thisComputer ??= mockParseKey(MOCK_MAC_KEY);
+      return s.thisComputer;
+    }
+    case "ssh_enable":
+      return sshRequest(1800, (s) => {
+        s.thisComputer ??= mockParseKey(MOCK_MAC_KEY);
+        mockAllow(s, MOCK_MAC_KEY);
+        return mockSshSet(s, true, "key");
+      });
+    case "ssh_disable":
+      return sshRequest(1200, (s) => mockSshSet(s, false, s.state.mode));
+    case "ssh_set_mode":
+      return sshRequest(1000, (s) => {
+        if (args.mode === "key") mockAllow(s, MOCK_MAC_KEY);
+        return mockSshSet(s, true, args.mode as SshMode);
+      });
+    case "ssh_check_key":
+      return mockParseKey(args.text as string);
+    case "ssh_add_key":
+      return sshRequest(1000, (s) => {
+        if (!mockAllow(s, args.text as string))
+          throw new ApiError("duplicate", "duplicate");
+        return s.state;
+      });
+    case "ssh_add_this_computer":
+      return sshRequest(1000, (s) => {
+        s.thisComputer ??= mockParseKey(MOCK_MAC_KEY);
+        if (!mockAllow(s, MOCK_MAC_KEY))
+          throw new ApiError("duplicate", "duplicate");
+        return s.state;
+      });
+    case "ssh_remove_key":
+      return sshRequest(1000, (s) => {
+        const fp = args.fingerprint as string;
+        if (!s.lines.delete(fp))
+          throw new ApiError("unknown_key", "unknown_key");
+        s.state.keys = s.state.keys.filter((k) => k.fingerprint !== fp);
+        if (s.state.keys.length === 0 && s.state.mode === "key")
+          s.state = { ...s.state, enabled: false, running: false };
+        return s.state;
+      });
     case "t3k_open_link_again":
     case "t3k_open_site":
     case "sd_open_privacy_settings":

@@ -603,6 +603,17 @@ async fn ssh_state(state: State<'_, AppState>) -> Result<SshView, ApiError> {
     Ok(SshView { ssh, this_computer })
 }
 
+/// This computer's public key, created when missing: the first step of turning on.
+#[tauri::command]
+async fn ssh_create_key() -> Result<ssh::PublicKey, ApiError> {
+    tauri::async_runtime::spawn_blocking(this_computer_key)
+        .await
+        .map_err(|e| ApiError {
+            code: "key_failed",
+            message: e.to_string(),
+        })?
+}
+
 /// Turn SSH on in Key only, allowing this computer (its key is created if missing).
 #[tauri::command]
 async fn ssh_enable(state: State<'_, AppState>) -> Result<ssh::SshState, ApiError> {
@@ -994,6 +1005,7 @@ pub fn run() {
             wifi_join,
             wifi_forget,
             ssh_state,
+            ssh_create_key,
             ssh_enable,
             ssh_disable,
             ssh_set_mode,

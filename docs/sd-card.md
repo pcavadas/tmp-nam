@@ -126,13 +126,13 @@ Notes that will save you time:
 
 ## 6. Wi-Fi + SSH (no computer needed)
 
-The card starts SSH automatically. Joining a network is a separate
+The card includes SSH, off until you turn it on in the app. Joining a network is a separate
 prerequisite for pushing `.nam` files:
 
 1. Join your Wi-Fi **once** from TMP NAM → Settings → Wi-Fi (or the factory-test
    UI's Wi-Fi Test: hold the top-left footswitch at power-on). The unit keeps
    Wi-Fi on and rejoins saved networks on later boots until you turn it off.
-2. On each boot the LAN installer atomically refreshes `dropbear`, `dropbearkey`, `t3k_sync.py` and `register_nam_ir.py` under internal `/data` to match the card. SSH requires a successful installation. Existing host keys, models, settings and tokens remain; a missing host key is generated on-device. Connect with `ssh root@fmic-tm-pro.local` (blank password until you set one — do not expose port 22 beyond your LAN).
+2. On each boot the LAN installer atomically refreshes `dropbear`, `dropbearkey`, `t3k_sync.py` and `register_nam_ir.py` under internal `/data` to match the card. SSH requires a successful installation. Existing host keys, models, settings and tokens remain; a missing host key is generated on-device. SSH is off until you turn on SSH access in TMP NAM → Settings → Wi-Fi (Key only, or No security for a phone; see [LAN access](device/lan-access.md#3-ssh-access)). Then connect with `ssh root@fmic-tm-pro.local`; do not expose port 22 beyond your LAN.
 3. Push a capture straight into the User IR store:
    ```sh
    ssh root@fmic-tm-pro.local 'cat > /data/userIRs/My_Model.nam.wav' < My_Model.nam

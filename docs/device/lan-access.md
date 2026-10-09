@@ -20,7 +20,7 @@ The engine applies `/data/settings.json` `wifiEnabled` every time it starts, wit
 
 Saved networks and the setting live on internal `/data`, so the unit also rejoins them when it boots the stock firmware without the card.
 
-`/var/lib/connman/fenderupdate.config`, which a factory reset copies into `/data`, makes the unit join any WPA2 network named `FENDER_UPDATE` with Fender's published passphrase while Wi-Fi is on. The app warns when it is present.
+`/var/lib/connman/fenderupdate.config`, which a factory reset copies into `/data`, makes the unit join any WPA2 network named `FENDER_UPDATE` with Fender's published passphrase while Wi-Fi is on. The app mentions it under "About Wi-Fi on the unit" when it is present; it matters only while SSH access is set to No security, or on a card too old for the SSH access switch.
 
 Check association from the USB console:
 
@@ -28,7 +28,19 @@ Check association from the USB console:
 dbus-send --system --print-reply --dest=net.connman / net.connman.Manager.GetServices
 ```
 
-## 3. Exact SSH and helper installation
+## 3. SSH access
+
+SSH is **off by default** and is switched in **TMP NAM → Settings → Wi-Fi → SSH access**, over the USB cable. The choice is stored on internal storage (`/data/nam/ssh/state`) and applied at every start with the card, by `/usr/local/bin/nam-ssh.sh` (`dropbear-nam.service`):
+
+- **Off** (`enabled=0`, or no file): Dropbear doesn't run.
+- **Key only** (`mode=key`): only allowed public keys log in; Dropbear runs with `-s`, so password logins are refused, including root's empty one. Turning SSH on starts here and allows this computer: the app reads `~/.ssh/id_ed25519.pub`, creating it with `ssh-keygen` when missing; the private key is never read.
+- **No security** (`mode=none`): anyone on the network logs in as root with no key or password (Dropbear `-B`; stock root has an empty password). The app asks for confirmation and warns while it is on. Useful for an SSH app on a phone, whose key is otherwise added with **Add Another Computer…** (paste its public key).
+
+Allowed keys live in `/data/nam/ssh/authorized_keys` (root's `~/.ssh/authorized_keys` on the card points there), so they survive new cards. Removing the last allowed computer in Key only turns SSH off. A factory reset that clears `/data` removes the setting, the keys and the host key: SSH is then off until it is turned on again, and clients see a new host key.
+
+A card made before this switch runs SSH with a blank root password at every boot; the app shows it as too old and offers to create a new card.
+
+## 4. SSH and helper installation
 
 The distributed release supplies `dropbear` and `dropbearkey`, built from pinned Dropbear 2024.86 sources as static, stripped AArch64/musl binaries. Their current hashes are pinned in `device/release.json`. Card writing does not compile them.
 
@@ -41,7 +53,7 @@ On every boot, `nam-lan-install.service` installs each packaged file atomically 
 /data/nam/register_nam_ir.py
 ```
 
-`dropbear-nam.service` requires successful installer completion before it starts. Existing SSH host keys, NAM captures, player settings, network settings and TONE3000 tokens are retained. A missing host key is generated on-device at `/data/nam/ssh/ed25519`. The service configuration lives on the SD root; `/data/nam` persists across card changes. Put client public keys in `/home/root/.ssh/authorized_keys` on the SD root. On the device, `/home/root` is part of that read-only root filesystem; remount it writable before changing authorized keys (`mount -o remount,rw /`). This device-side step does not mount anything on the host computer.
+`dropbear-nam.service` requires successful installer completion before it starts. Existing SSH host keys, NAM captures, player settings, network settings and TONE3000 tokens are retained. A missing host key is generated on-device at `/data/nam/ssh/ed25519`. The service configuration lives on the SD root; `/data/nam` persists across card changes.
 
 Check a new card from its USB console before relying on network access:
 
@@ -50,11 +62,12 @@ systemctl status nam-lan-install.service dropbear-nam.service
 cat /etc/sd-root-build-id
 sha256sum /data/nam/bin/dropbear /data/nam/bin/dropbearkey
 sha256sum /data/nam/t3k_sync.py /data/nam/register_nam_ir.py
+cat /data/nam/ssh/state
 ```
 
 Compare the active files with that card's manifest and build ID. If installation failed, inspect `journalctl -u nam-lan-install.service` and fix the failed installation before starting SSH. Package checks alone do not establish remote network access.
 
-Connect with `ssh root@fmic-tm-pro.local`. Dropbear uses `-B`, which allows a blank password; install a client key or set a password, and do not forward port 22 beyond the LAN. OpenSSH `scp` defaults to SFTP, but this image has no `sftp-server`. Transfer a model with:
+Connect with `ssh root@fmic-tm-pro.local` (or the unit's address) once SSH access is on, and do not forward port 22 beyond the LAN. OpenSSH `scp` defaults to SFTP, but this image has no `sftp-server`. Transfer a model with:
 
 ```sh
 ssh root@fmic-tm-pro.local 'cat > /data/userIRs/My_Model.nam.wav' < My_Model.nam
@@ -62,7 +75,7 @@ ssh root@fmic-tm-pro.local 'cat > /data/userIRs/My_Model.nam.wav' < My_Model.nam
 
 Register it using `python3 /data/nam/register_nam_ir.py` and restart `tm-stomp-server` when ready to reload the picker.
 
-## 4. TONE3000
+## 5. TONE3000
 
 The installer supplies the Python helpers. TONE3000 configuration and tokens remain under `/data/nam`:
 

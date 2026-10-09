@@ -1,8 +1,13 @@
 // Flows against the in-page mock backend (src/lib/mock.ts), one per page.
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { api, type AddOutcome, type PlayerOptionsPatch } from "../lib/api";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  api,
+  type AddOutcome,
+  type PlayerOptionsPatch,
+  type SshState,
+} from "../lib/api";
 import { resetMockWifi } from "../lib/mock";
 import App from "../App";
 
@@ -708,8 +713,245 @@ describe("Settings › Wi-Fi", () => {
   it("turns Wi-Fi off and hides the networks", async () => {
     await openWifi();
     await userEvent.click(screen.getByRole("switch", { name: "Wi-Fi" }));
-    expect(await screen.findByText("Off", undefined, wait)).toBeInTheDocument();
+    // Wait for the change to finish: the switch is busy (disabled) until then.
+    await waitFor(() => {
+      const toggle = screen.getByRole("switch", { name: "Wi-Fi" });
+      expect(toggle).toBeEnabled();
+      expect(toggle).not.toBeChecked();
+    }, wait);
     expect(screen.queryByRole("list", { name: "Networks" })).toBeNull();
-    expect(screen.getByRole("switch", { name: "Wi-Fi" })).not.toBeChecked();
+  });
+});
+
+describe("Settings › Wi-Fi › SSH access", () => {
+  beforeEach(resetMockWifi);
+
+  const PHONE =
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILi8KzRrtyJmUSNagtW73E1WgHF2YdXmSwVpuHnQjg6t me@phone";
+
+  async function openSsh(query = "/") {
+    window.history.replaceState(null, "", query);
+    resetMockWifi();
+    render(<App />);
+    await screen.findByRole(
+      "heading",
+      { name: "Fender Deluxe Reverb '65 Vibrato" },
+      wait,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
+    await userEvent.click(screen.getByRole("tab", { name: "Wi-Fi" }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Scan Again" })).toBeEnabled();
+    }, wait);
+    const card = await screen.findByRole(
+      "region",
+      { name: "SSH access" },
+      wait,
+    );
+    await within(card).findByRole("switch", { name: "SSH access" }, wait);
+    return card;
+  }
+
+  async function turnOn(card: HTMLElement) {
+    await userEvent.click(
+      within(card).getByRole("switch", { name: "SSH access" }),
+    );
+    await within(card).findByText("On · key only", undefined, wait);
+  }
+
+  afterEach(() => {
+    window.history.replaceState(null, "", "/");
+  });
+
+  it("is off by default and turns on in Key only, allowing this Mac", async () => {
+    const card = await openSsh();
+    expect(within(card).getByText("Off")).toBeInTheDocument();
+    expect(
+      within(card).getByRole("switch", { name: "SSH access" }),
+    ).not.toBeChecked();
+    await userEvent.click(
+      within(card).getByRole("switch", { name: "SSH access" }),
+    );
+    expect(
+      await within(card).findByText(
+        /creating a key on this Mac/,
+        undefined,
+        wait,
+      ),
+    ).toBeInTheDocument();
+    await within(card).findByText("On · key only", undefined, wait);
+    const list = within(card).getByRole("list", { name: "Allowed computers" });
+    expect(within(list).getByText("This Mac")).toBeInTheDocument();
+    expect(
+      within(card).getByText("ssh root@fmic-tm-pro.local"),
+    ).toBeInTheDocument();
+    expect(
+      within(card).getByText(/Or ssh root@192\.168\.1\.57/),
+    ).toBeInTheDocument();
+    expect(
+      within(card).queryByRole("button", { name: "Add This Mac" }),
+    ).toBeNull();
+  });
+
+  it("refuses a pasted private key and adds a public one", async () => {
+    const card = await openSsh();
+    await turnOn(card);
+    await userEvent.click(
+      within(card).getByRole("button", { name: "Add Another Computer…" }),
+    );
+    const sheet = screen.getByRole("dialog", { name: "Add another computer" });
+    const field = within(sheet).getByLabelText("Public key");
+    await userEvent.click(field);
+    await userEvent.paste(
+      "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXk=\n-----END OPENSSH PRIVATE KEY-----",
+    );
+    expect(
+      within(sheet).getByText("That was a private key, so it wasn't kept"),
+    ).toBeInTheDocument();
+    expect(within(sheet).getByLabelText("Public key")).toHaveValue("");
+    expect(
+      within(sheet).getByRole("button", { name: "Add Computer" }),
+    ).toBeDisabled();
+    await userEvent.click(within(sheet).getByLabelText("Public key"));
+    await userEvent.paste(PHONE);
+    expect(await within(sheet).findByText("Valid key")).toBeInTheDocument();
+    await userEvent.click(
+      within(sheet).getByRole("button", { name: "Add Computer" }),
+    );
+    expect(
+      await screen.findByText("me@phone can log in", undefined, wait),
+    ).toBeInTheDocument();
+    const list = within(card).getByRole("list", { name: "Allowed computers" });
+    expect(within(list).getByText("me@phone")).toBeInTheDocument();
+  });
+
+  it("removing the last computer turns SSH access off", async () => {
+    const card = await openSsh();
+    await turnOn(card);
+    await userEvent.click(
+      within(card).getByRole("button", { name: /^Remove / }),
+    );
+    const confirm = screen.getByRole("alertdialog");
+    expect(
+      within(confirm).getByText(/It's the last allowed computer/),
+    ).toBeInTheDocument();
+    await userEvent.click(
+      within(confirm).getByRole("button", { name: "Remove and Turn Off" }),
+    );
+    expect(
+      await screen.findByText("SSH access is off", undefined, wait),
+    ).toBeInTheDocument();
+    expect(
+      within(card).getByRole("switch", { name: "SSH access" }),
+    ).not.toBeChecked();
+  });
+
+  it("No security asks first, then warns everywhere", async () => {
+    const card = await openSsh();
+    await turnOn(card);
+    await userEvent.click(
+      within(card).getByRole("radio", { name: /No security/ }),
+    );
+    await userEvent.click(
+      within(
+        screen.getByRole("alertdialog", { name: "Turn off SSH security?" }),
+      ).getByRole("button", { name: "Allow Root Access Without a Key" }),
+    );
+    expect(
+      await within(card).findByText(
+        "On · no security: anyone on the network has root access",
+        undefined,
+        wait,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Anyone on Studio has root access to the NAM card/),
+    ).toBeInTheDocument();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Join Neighbours 5G" }),
+    );
+    expect(
+      within(screen.getByRole("dialog")).getByText(
+        "Anyone on Neighbours 5G could log in as root",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("explains a card too old and offers SD Card", async () => {
+    const card = await openSsh("/?ssh=old");
+    const toggle = within(card).getByRole("switch", { name: "SSH access" });
+    expect(toggle).toBeChecked();
+    expect(toggle).toBeDisabled();
+    expect(
+      within(card).getByText("This card's SSH accepts a blank password"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /Anyone on Studio can log in to the NAM card with no password/,
+      ),
+    ).toBeInTheDocument();
+    await userEvent.click(
+      within(card).getByRole("button", { name: "Open SD Card" }),
+    );
+    expect(
+      await screen.findByText(/Choose File/, undefined, wait),
+    ).toBeInTheDocument();
+  });
+
+  it("reports a unit that doesn't answer and keeps SSH off", async () => {
+    const card = await openSsh("/?ssh=silent");
+    await userEvent.click(
+      within(card).getByRole("switch", { name: "SSH access" }),
+    );
+    expect(
+      await screen.findByText("SSH access is still off", undefined, wait),
+    ).toBeInTheDocument();
+    expect(
+      within(card).getByRole("switch", { name: "SSH access" }),
+    ).not.toBeChecked();
+  });
+
+  it("an SSH change disables Wi-Fi controls and sends", async () => {
+    const enabling = new Promise<SshState>(() => undefined);
+    const enable = vi.spyOn(api, "sshEnable").mockReturnValue(enabling);
+    try {
+      const card = await openSsh();
+      await userEvent.click(
+        within(card).getByRole("switch", { name: "SSH access" }),
+      );
+      await within(card).findByText(
+        /adding this Mac to the unit/,
+        undefined,
+        wait,
+      );
+      expect(
+        screen.getByRole("button", { name: "Scan Again" }),
+      ).toHaveAttribute("title", "Available when the SSH change finishes");
+      await userEvent.click(screen.getByRole("button", { name: /^Captures/ }));
+      expect(
+        screen.getByRole("button", { name: "Add Captures…" }),
+      ).toHaveAttribute("title", "Available when the SSH change finishes");
+    } finally {
+      enable.mockRestore();
+    }
+  });
+
+  it("a Wi-Fi change disables the SSH switch", async () => {
+    const joining = new Promise<"connected">(() => undefined);
+    const join = vi.spyOn(api, "wifiJoin").mockReturnValue(joining);
+    try {
+      const card = await openSsh();
+      await userEvent.click(
+        screen.getByRole("button", { name: "Join Rehearsal Room" }),
+      );
+      const toggle = within(card).getByRole("switch", { name: "SSH access" });
+      expect(toggle).toBeDisabled();
+      expect(toggle.closest("[title]")).toHaveAttribute(
+        "title",
+        "Available when the Wi-Fi change finishes",
+      );
+    } finally {
+      join.mockRestore();
+    }
   });
 });

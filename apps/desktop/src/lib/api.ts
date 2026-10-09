@@ -269,6 +269,35 @@ export type WifiJoinOutcome =
 /** The unit only forgets a network that's in range. */
 export type WifiForgetOutcome = "forgotten" | "out_of_range";
 
+/** key: allowed computers only, never passwords. none: anyone, as root, no password. */
+export type SshMode = "key" | "none";
+
+export interface AuthorizedKey {
+  type: string;
+  bits: number | null;
+  comment: string;
+  /** "SHA256:…", as `ssh-keygen -l` prints it. */
+  fingerprint: string;
+}
+
+export interface SshState {
+  /** false: a card made before SSH access could be switched (open, no password). */
+  supported: boolean;
+  enabled: boolean;
+  mode: SshMode;
+  running: boolean | null;
+  keys: AuthorizedKey[];
+}
+
+/** A parsed public key (the key itself stays in the backend). */
+export type PublicKey = AuthorizedKey;
+
+export interface SshView {
+  ssh: SshState;
+  /** This computer's key, if it has one. */
+  this_computer: PublicKey | null;
+}
+
 /** An error from a command that classifies its failures (Tone3000). */
 export class ApiError extends Error {
   constructor(
@@ -350,8 +379,23 @@ export const api = {
   wifiJoin: (join: WifiJoin) => call<WifiJoinOutcome>("wifi_join", { join }),
   wifiForget: (ssid: string, security: number) =>
     call<WifiForgetOutcome>("wifi_forget", { ssid, security }),
-  /** The LAN guide's SSH section in the system browser. */
-  openLanGuide: () => call<null>("open_lan_guide"),
+
+  /** SSH access as the card reports it, plus this computer's key if it has one. */
+  sshState: () => call<SshView>("ssh_state"),
+  /** This computer's public key, created when missing (first step of turning on). */
+  sshCreateKey: () => call<PublicKey>("ssh_create_key"),
+  /** On in Key only, allowing this computer. */
+  sshEnable: () => call<SshState>("ssh_enable"),
+  sshDisable: () => call<SshState>("ssh_disable"),
+  /** Key only also allows this computer if the list doesn't have it. */
+  sshSetMode: (mode: SshMode) => call<SshState>("ssh_set_mode", { mode }),
+  /** Check one pasted public key; never pass text that looks like a private key. */
+  sshCheckKey: (text: string) => call<PublicKey>("ssh_check_key", { text }),
+  sshAddKey: (text: string) => call<SshState>("ssh_add_key", { text }),
+  sshAddThisComputer: () => call<SshState>("ssh_add_this_computer"),
+  /** Removing the last key in Key only turns SSH off. */
+  sshRemoveKey: (fingerprint: string) =>
+    call<SshState>("ssh_remove_key", { fingerprint }),
 
   settingsGet: () => call<Settings>("settings_get"),
   settingsSet: (settings: Settings) => call<null>("settings_set", { settings }),

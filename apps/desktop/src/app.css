@@ -494,13 +494,6 @@ h2.t-display {
   min-width: 0;
   overflow-wrap: anywhere;
 }
-.wifi-warn {
-  background: var(--warn-weak);
-  color: var(--warn);
-  font-size: 12px;
-  justify-content: space-between;
-  border-radius: 0 0 var(--radius-card) var(--radius-card);
-}
 .wifi-head {
   display: flex;
   align-items: center;
@@ -526,5 +519,25 @@ h2.t-display {
 .wifi-sheet {
   display: flex;
   flex-direction: column;
+  gap: var(--space-3);
+}
+.ssh-key-field {
+  width: 100%;
+  min-height: 64px;
+  resize: vertical;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.wifi-danger {
+  background: var(--danger-weak);
+  color: var(--danger);
+  font-size: 12px;
+  border-radius: 0 0 var(--radius-card) var(--radius-card);
+}
+.wifi-about ul {
+  list-style: none;
+  padding-left: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
   gap: var(--space-3);
 }

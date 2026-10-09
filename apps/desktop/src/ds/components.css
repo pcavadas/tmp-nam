@@ -1070,3 +1070,8 @@ circle.tn-signal-bar.is-lit {
   font-size: 12px;
   color: var(--text-3);
 }
+.tn-key-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--text-2);
+}

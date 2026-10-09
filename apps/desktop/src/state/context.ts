@@ -6,6 +6,7 @@ import type { AddOutcome, Capture, T3kPick, UnitInfo } from "../lib/api";
 import type { OpItem, OpKind, Operation } from "./operation";
 import type { SdStore } from "./sd";
 import type { T3kStore } from "./t3k";
+import type { SshStore } from "./ssh";
 import type { WifiStore } from "./wifi";
 
 /** Something the app can send to the unit, kept to retry it. */
@@ -85,6 +86,7 @@ export interface AppStore {
   t3k: T3kStore;
   sd: SdStore;
   wifi: WifiStore;
+  ssh: SshStore;
 }
 
 export const AppContext = createContext<AppStore | null>(null);
