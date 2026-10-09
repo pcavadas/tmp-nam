@@ -1845,6 +1845,40 @@ mod device_tests {
         println!("wifi_scan in {:?}: {scan:#?}", t.elapsed());
     }
 
+    /// Audio trouble in the journal over the last `TMPNAM_PROBE_MINUTES` (default 20),
+    /// e.g. after changing Wi-Fi while playing. Read-only.
+    #[test]
+    #[ignore = "needs a unit booted from the NAM card on USB"]
+    fn device_audio_log() {
+        let minutes = std::env::var("TMPNAM_PROBE_MINUTES").unwrap_or_else(|_| "20".into());
+        let port = find_port().expect("no TMP console port");
+        let mut unit = ConsoleUnit::open(&port).expect("open console");
+        for cmd in [
+            format!(
+                "journalctl --no-pager -q --since '-{minutes} min' | \
+                 grep -ciE 'xrun|underrun|overrun|deadline|dropout' || true"
+            ),
+            format!(
+                "journalctl --no-pager -q --since '-{minutes} min' | \
+                 grep -iE 'xrun|underrun|overrun|deadline|dropout' | tail -n 20"
+            ),
+            format!(
+                "journalctl --no-pager -q --since '-{minutes} min' -u connman -u tm-stomp-server \
+                 | tail -n 30"
+            ),
+            // How much the journal holds at all: an empty window proves nothing.
+            format!("journalctl --no-pager -q --since '-{minutes} min' | wc -l"),
+            "journalctl --no-pager -q -n 5".to_string(),
+            "date".to_string(),
+        ] {
+            let (code, out) = unit
+                .console
+                .run(&cmd, Duration::from_secs(30))
+                .expect("console");
+            println!("$ {cmd}  (exit {code})\n{}", out.trim_end());
+        }
+    }
+
     /// Adds, configures and removes a throwaway capture through the HID channel; the
     /// engine never restarts (Pro Control must be closed). With `TMPNAM_PROBE_SELECT=1`
     /// it waits up to 90 s for the capture to be selected on the unit and checks that
