@@ -176,7 +176,7 @@ export function joinNotice(
         tone: "error",
         title: `Couldn't join ${ssid}`,
         text: hidden
-          ? "The unit didn't find a network with that name and security, or didn't get an address from it. Check that the router is on and in range, then try again."
+          ? "The unit didn't find a network with that name and security, or didn't get an address from it. Check that the router is on and in range, then try again. If the network was hidden only minutes ago and still shows in the list by name, join it from the list."
           : "The unit didn't find the network or didn't get an address from it. Check that the router is on and in range, then try again.",
         action: sheet
           ? { label: "Try Again…", kind: "retry-sheet" }
