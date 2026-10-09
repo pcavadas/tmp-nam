@@ -249,12 +249,7 @@ fn verify(
         .prefix("nam-image-verify-")
         .tempdir()?;
     let mut pinned: Vec<(&str, Pin)> = vec![(&a.nam_dispatch.target, a.nam_dispatch.pin())];
-    for x in [
-        &a.dropbear,
-        &a.dropbearkey,
-        &a.dropbear_service,
-        &a.t3k,
-    ] {
+    for x in [&a.dropbear, &a.dropbearkey, &a.dropbear_service, &a.t3k] {
         pinned.push((&x.target, x.pin()));
     }
     pinned.push((&priority.target, priority.patched.clone()));

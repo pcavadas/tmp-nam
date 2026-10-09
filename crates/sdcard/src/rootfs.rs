@@ -252,10 +252,7 @@ pub fn apply(
         rootfs.join(LAN_SERVICE_DROPIN).parent().expect("parent"),
         0o755,
     )?;
-    for service in [
-        &assets.dropbear_service.target,
-        &layout.lan_service_target,
-    ] {
+    for service in [&assets.dropbear_service.target, &layout.lan_service_target] {
         let service = Path::new(service);
         let name = service
             .file_name()
