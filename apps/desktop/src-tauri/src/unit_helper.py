@@ -138,12 +138,43 @@ def registered_names():
                if isinstance(e, dict) and e.get("name"))
 
 
+def listed_options(entry):
+    # Only expose the numeric options the desktop understands. Invalid values
+    # must not make the entire list undecodable by the Rust backend.
+    if not isinstance(entry, dict):
+        raise ValueError("expected a capture settings object")
+    options = {}
+    for key, maximum in (("size", 1), ("output_gain", 8)):
+        if key in entry:
+            value = entry[key]
+            if (isinstance(value, bool) or not isinstance(value, (int, float))
+                    or not 0 <= value <= maximum):
+                raise ValueError("invalid " + key)
+            options[key] = value
+    return options
+
+
 def cmd_list(_args):
     names = registered_names()
-    player = read_json(PLAYER, {})
-    opts = player.get("models") if isinstance(player, dict) else None
-    if not isinstance(opts, dict):
+    settings_error = None
+    try:
+        with open(PLAYER, "rb") as f:
+            player = json.loads(f.read().decode("utf-8"))
+        if not isinstance(player, dict) or not isinstance(player.get("models"), dict):
+            raise ValueError("expected a models object")
+        opts = player["models"]
+        if any(not isinstance(entry, dict) for entry in opts.values()):
+            settings_error = "Invalid capture settings in %s." % PLAYER
+    except FileNotFoundError:
         opts = {}
+        if os.path.lexists(PLAYER):
+            settings_error = "Cannot read %s." % PLAYER
+    except OSError:
+        opts = {}
+        settings_error = "Cannot read %s." % PLAYER
+    except ValueError:
+        opts = {}
+        settings_error = "Invalid player settings in %s." % PLAYER
     index = read_json(INDEX, {})
     if not isinstance(index, dict):
         index = {}
@@ -177,8 +208,12 @@ def cmd_list(_args):
             "present": True,
         }
         row.update(cached)
-        sel = opts.get(cached.get("sha256"))
-        row["options"] = sel if isinstance(sel, dict) else {}
+        sel = opts.get(cached.get("sha256"), {})
+        try:
+            row["options"] = listed_options(sel)
+        except ValueError:
+            row["options"] = {}
+            settings_error = "Invalid capture settings in %s." % PLAYER
         rows.append(row)
     for name in sorted(names):
         if name.endswith(".nam") and not os.path.isfile(
@@ -191,7 +226,10 @@ def cmd_list(_args):
             write_json(INDEX, fresh)
         except Exception:
             pass
-    emit({"models": rows})
+    result = {"models": rows}
+    if settings_error:
+        result["settings_error"] = settings_error
+    emit(result)
 
 
 def cmd_register(args):
@@ -286,10 +324,14 @@ def backup_player(raw):
 
 
 def cmd_opts(args):
-    # opts <sha256> <size|-> <gain|->
+    # opts <sha256> <size|-|=> <gain|-|=>; = keeps, - removes.
     sha, size, gain = args[0], args[1], args[2]
     values = [(key, None if value == "-" else float(value))
-              for key, value in (("size", size), ("output_gain", gain))]
+              for key, value in (("size", size), ("output_gain", gain))
+              if value != "="]
+    if not values:
+        emit({"unchanged": True})
+        return
     raw = None
     try:
         with open(PLAYER, "rb") as f:
