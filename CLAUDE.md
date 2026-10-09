@@ -27,7 +27,7 @@ or binary-analysis code here; `scripts/check.sh` enforces that with a grep.
 ## Commands
 
 ```bash
-scripts/check.sh quick                     # syntax + helper tests + release-pin integrity + no-exploit grep
+scripts/check.sh quick                     # syntax + helper tests + rustfmt + release-pin integrity + no-exploit grep
 scripts/check.sh all                       # + cargo test/clippy -D warnings + desktop typecheck/lint/vitest
 cargo test --workspace                     # Rust (crates/sdcard + app backend, incl. pty console tests)
 cargo test -p tmp-sdcard --test release    # device/ assets, player sources, licenses vs release.json
