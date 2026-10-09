@@ -69,7 +69,9 @@ structure, the desktop first saves the exact old bytes in a uniquely named
 `/data/nam/player.json.invalid.*` backup, then atomically saves a fresh settings
 file containing the requested options. Other captures revert to defaults. If
 only the selected capture's entry is not an object, it resets that entry while
-preserving other entries and top-level fields. The Inspector warns that recovery
+preserving other entries and top-level fields. An invalid size or gain in the
+selected capture's entry is dropped, or replaced when the change sets it, and
+the file is backed up the same way. The Inspector warns that recovery
 occurred and shows the backup path. Earlier backups are never overwritten; a
 failed backup or save leaves the original settings in place and reports an error.
 Reselect the capture on the unit to load the saved options.

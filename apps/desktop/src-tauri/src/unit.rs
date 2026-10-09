@@ -715,7 +715,12 @@ impl ConsoleUnit {
             return Err(error);
         }
         if read {
-            return f(h);
+            // A re-armed session that still can't read is gone too.
+            let again = f(h);
+            if let Err(e) = &again {
+                self.hid_lost(e);
+            }
+            return again;
         }
         Err(error)
     }

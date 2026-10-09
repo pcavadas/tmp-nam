@@ -364,16 +364,23 @@ def cmd_opts(args):
     if not isinstance(entry, dict):
         entry = {}
         recovery = "Invalid settings for this capture were reset."
-    # A kept value must be valid too: drop an invalid one (backed up below)
-    # so the player and the list fall back to the default.
+    # A saved value must be valid too. An invalid kept one is dropped so the
+    # player and the list fall back to the default; one the patch replaces is
+    # overwritten. Either way the original file is backed up below.
     changed = set(key for key, _ in values)
-    dropped = []
+    dropped, replaced = [], []
     for key, maximum in OPTION_LIMITS:
-        if key not in changed and key in entry and not valid_option(entry[key], maximum):
-            del entry[key]
-            dropped.append("output gain" if key == "output_gain" else key)
+        if key in entry and not valid_option(entry[key], maximum):
+            label = "output gain" if key == "output_gain" else key
+            if key in changed:
+                replaced.append(label)
+            else:
+                del entry[key]
+                dropped.append(label)
     if dropped:
         recovery = "Invalid %s for this capture was removed." % " and ".join(dropped)
+    elif replaced:
+        recovery = "Invalid saved %s for this capture was replaced." % " and ".join(replaced)
     for key, value in values:
         if value is None:
             entry.pop(key, None)

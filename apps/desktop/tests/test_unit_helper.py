@@ -235,6 +235,23 @@ class PlayerOptionsTests(unittest.TestCase):
                 backups = list(self.path.parent.glob("player.json.invalid.*"))
                 self.assertEqual([p.read_bytes() for p in backups], [before])
 
+    def test_replaced_invalid_options_are_backed_up(self):
+        for key, size, gain, expected in (
+                ("size", "0.5", "=", {"size": 0.5}),
+                ("output_gain", "=", "2", {"output_gain": 2.0})):
+            with self.subTest(key=key):
+                for backup in self.path.parent.glob("player.json.invalid.*"):
+                    backup.unlink()
+                self.save({"models": {"new-hash": {key: "bad"}}})
+                before = self.path.read_bytes()
+                result = self.options(size=size, gain=gain)
+                self.assertEqual(result["options"], expected)
+                label = "output gain" if key == "output_gain" else key
+                self.assertIn("Invalid saved %s for this capture was replaced." % label,
+                              result["warning"])
+                backups = list(self.path.parent.glob("player.json.invalid.*"))
+                self.assertEqual([p.read_bytes() for p in backups], [before])
+
     def test_valid_kept_options_need_no_recovery(self):
         self.save({"models": {"new-hash": {"output_gain": 8}}})
         self.assertEqual(self.options(size="0", gain="="),
