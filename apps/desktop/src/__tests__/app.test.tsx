@@ -502,11 +502,7 @@ describe("Settings › Wi-Fi", () => {
   it("drops a network it couldn't forget because it's out of range", async () => {
     const forget = vi
       .spyOn(api, "wifiForget")
-      .mockRejectedValue(
-        new Error(
-          "The unit couldn't forget this network. It can only forget a network that's in range.",
-        ),
-      );
+      .mockResolvedValue("out_of_range");
     try {
       const list = await openWifi();
       await userEvent.click(

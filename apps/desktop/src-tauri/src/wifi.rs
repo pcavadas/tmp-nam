@@ -24,9 +24,8 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::hid::{
-    bytes_field, get_bytes, get_varint, nested, parse, varint_field, HidSession, Val, SETTINGS,
-};
+use crate::hid::{HidSession, SETTINGS};
+use crate::proto::{bytes_field, get_bytes, get_varint, nested, parse, varint_field, Val};
 
 const WIFI: u32 = 9;
 
@@ -92,7 +91,8 @@ pub struct Network {
 pub enum WifiEvent {
     Status(WifiStatus),
     List(Vec<Network>),
-    Forgotten { ssid: String, security: u32 },
+    /// The SSID of a forgotten network.
+    Forgotten(String),
     Error(u64),
 }
 
@@ -135,6 +135,15 @@ pub enum JoinOutcome {
     Failed,
     /// Neither a status nor an error within `JOIN_WAIT`.
     NoResponse,
+}
+
+/// How a forget ended. Out of range is an expected result: the engine only forgets a
+/// network ConnMan currently lists.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ForgetOutcome {
+    Forgotten,
+    OutOfRange,
 }
 
 /// Everything the Settings page shows.
@@ -286,10 +295,7 @@ fn wifi_event(msg: &[u8]) -> Option<WifiEvent> {
                 })
                 .collect(),
         ),
-        FORGOTTEN => WifiEvent::Forgotten {
-            ssid: text(&m, 1),
-            security: number(&m, 2),
-        },
+        FORGOTTEN => WifiEvent::Forgotten(text(&m, 1)),
         ERROR => WifiEvent::Error(get_varint(&m, 1).unwrap_or(0)),
         _ => return None,
     })
@@ -347,11 +353,12 @@ fn list(e: WifiEvent) -> Option<Vec<Network>> {
     }
 }
 
-/// Status, stored preference and known networks.
-pub fn state(h: &mut HidSession) -> Result<WifiState, String> {
+/// Status, stored preference and, with `with_networks`, the networks ConnMan knows
+/// (callers about to scan skip them).
+pub fn state(h: &mut HidSession, with_networks: bool) -> Result<WifiState, String> {
     let status = status(h)?;
     let saved_enabled = saved(h)?;
-    let networks = if status.enabled {
+    let networks = if with_networks && status.enabled {
         networks(h)?
     } else {
         Vec::new()
@@ -377,7 +384,8 @@ fn enable_plan(on: bool, saved: Option<bool>, live: bool) -> Vec<bool> {
     }
 }
 
-pub fn set_enabled(h: &mut HidSession, on: bool) -> Result<(), String> {
+/// Returns the status and stored preference it confirmed (no networks).
+pub fn set_enabled(h: &mut HidSession, on: bool) -> Result<WifiState, String> {
     let mut live = status(h)?.enabled;
     for step in enable_plan(on, saved(h)?, live) {
         let failed = if step { ERR_ENABLE } else { ERR_DISABLE };
@@ -399,21 +407,19 @@ pub fn set_enabled(h: &mut HidSession, on: bool) -> Result<(), String> {
         }
     }
     // A request that left the radio as it was sends nothing: confirm both values.
-    let (live, stored) = (status(h)?.enabled, saved(h)?);
-    if live != on || stored.is_some_and(|s| s != on) {
+    let confirmed = state(h, false)?;
+    if confirmed.status.enabled != on || confirmed.saved_enabled.is_some_and(|s| s != on) {
         return Err(if on {
             "Wi-Fi didn't turn on. Try again.".into()
         } else {
             "Wi-Fi didn't turn off. Try again.".into()
         });
     }
-    Ok(())
+    Ok(confirmed)
 }
 
+/// Join `j`, already checked with `check_join`.
 pub fn join(h: &mut HidSession, j: &Join) -> Result<JoinOutcome, String> {
-    if let Some(e) = check_join(j) {
-        return Err(e);
-    }
     // ConnMan may keep a hidden network's service nameless after joining it.
     let joined =
         |s: &WifiStatus| s.connected && (s.ssid == j.ssid || j.hidden && s.ssid.is_empty());
@@ -436,20 +442,17 @@ pub fn join(h: &mut HidSession, j: &Join) -> Result<JoinOutcome, String> {
 }
 
 /// Forget a saved network. ConnMan must currently list it (in range).
-pub fn forget_network(h: &mut HidSession, ssid: &str, security: u32) -> Result<(), String> {
-    let answer = exchange(h, &forget(ssid, security), REPLY, |e| match e {
-        WifiEvent::Forgotten { ssid: s, .. } if s == ssid => Some(true),
-        WifiEvent::Error(ERR_FORGET) => Some(false),
+pub fn forget_network(
+    h: &mut HidSession,
+    ssid: &str,
+    security: u32,
+) -> Result<ForgetOutcome, String> {
+    exchange(h, &forget(ssid, security), REPLY, |e| match e {
+        WifiEvent::Forgotten(s) if s == ssid => Some(ForgetOutcome::Forgotten),
+        WifiEvent::Error(ERR_FORGET) => Some(ForgetOutcome::OutOfRange),
         _ => None,
-    })?;
-    match answer {
-        Some(true) => Ok(()),
-        Some(false) => Err(
-            "The unit couldn't forget this network. It can only forget a network that's in range."
-                .into(),
-        ),
-        None => Err(no_answer("forget")),
-    }
+    })?
+    .ok_or_else(|| no_answer("forget"))
 }
 
 #[cfg(test)]
@@ -550,10 +553,7 @@ mod tests {
         );
         assert_eq!(
             wifi_event(&hex("4a 0d 2a 0b 0a 07 48 6f 6d 65 4e 65 74 10 03")),
-            Some(WifiEvent::Forgotten {
-                ssid: "HomeNet".into(),
-                security: SECURITY_PSK
-            })
+            Some(WifiEvent::Forgotten("HomeNet".into()))
         );
         // An empty list, a request echoed back and another family are not events.
         assert_eq!(

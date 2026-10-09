@@ -38,7 +38,7 @@ use sha2::{Digest, Sha256};
 
 use crate::console::{find_port, sh_quote, Console};
 use crate::hid::{placeholder_wav, HidSession};
-use crate::wifi::{self, Join, JoinOutcome, Network, WifiState};
+use crate::wifi::{self, ForgetOutcome, Join, JoinOutcome, Network, WifiState};
 
 const HELPER: &str = include_str!("unit_helper.py");
 const HELPER_PATH: &str = "/tmp/tmpnam_helper.py";
@@ -301,16 +301,19 @@ pub trait Unit: Send {
     ) -> Result<Option<String>, String>;
     /// Cheap liveness check; false means the transport is gone.
     fn alive(&mut self) -> bool;
-    /// Wi-Fi status, stored preference and the networks ConnMan knows.
-    fn wifi_state(&mut self) -> Result<WifiState, String>;
+    /// Wi-Fi status, stored preference and, with `with_networks`, the networks
+    /// ConnMan knows.
+    fn wifi_state(&mut self, with_networks: bool) -> Result<WifiState, String>;
     fn wifi_scan(&mut self) -> Result<Vec<Network>, String>;
-    fn wifi_set_enabled(&mut self, on: bool) -> Result<(), String>;
+    /// The state it confirmed, without networks.
+    fn wifi_set_enabled(&mut self, on: bool) -> Result<WifiState, String>;
+    /// `join` was checked with `wifi::check_join`.
     fn wifi_join(&mut self, join: &Join) -> Result<JoinOutcome, String>;
-    fn wifi_forget(&mut self, ssid: &str, security: u32) -> Result<(), String>;
+    fn wifi_forget(&mut self, ssid: &str, security: u32) -> Result<ForgetOutcome, String>;
 }
 
-/// Why Wi-Fi settings can't reach the engine.
-const WIFI_NO_HID: &str = "Wi-Fi settings use the unit's control channel, which another app \
+/// Why Wi-Fi settings can't reach the engine; `lib.rs` reports it as `channel_held`.
+pub const WIFI_NO_HID: &str = "Wi-Fi settings use the unit's control channel, which another app \
 (Pro Control or TMP Companion) is holding. Quit it, then try again in a minute.";
 
 /// Open the real console if a port exists, else the simulator when enabled.
@@ -431,6 +434,8 @@ pub struct ConsoleUnit {
     /// When opening it last failed; a failed exclusive open re-arms that lockout, so
     /// don't retry before `HID_RETRY`.
     hid_failed: Option<Instant>,
+    /// `wifi_files`, read once per connection: neither changes while the unit runs.
+    wifi_files: Option<(Option<bool>, bool)>,
 }
 
 fn parse_last_json(out: &str) -> Result<Value, String> {
@@ -474,6 +479,7 @@ impl ConsoleUnit {
             console,
             hid: None,
             hid_failed: None,
+            wifi_files: None,
         };
         let v = unit.helper("info", &[], 30)?;
         let s = |k: &str| v.get(k).and_then(|x| x.as_str()).map(str::to_string);
@@ -681,17 +687,26 @@ impl ConsoleUnit {
         Err(error)
     }
 
-    /// Whether `wlan0` exists and Fender's `FENDER_UPDATE` provisioning file is in
-    /// ConnMan's storage (fixed, read-only checks).
-    fn wifi_files(&mut self) -> (Option<bool>, bool) {
-        match self.console.run(
-            "[ -e /sys/class/net/wlan0 ] && echo radio; \
-             [ -e /var/lib/connman/fenderupdate.config ] && echo fender; true",
-            Duration::from_secs(10),
-        ) {
-            Ok((_, out)) => (Some(out.contains("radio")), out.contains("fender")),
-            Err(_) => (None, false),
-        }
+    /// `state` plus whether `wlan0` exists and Fender's `FENDER_UPDATE` provisioning
+    /// file is in ConnMan's storage (fixed, read-only checks, once per connection).
+    fn with_wifi_files(&mut self, mut state: WifiState) -> WifiState {
+        let files = match self.wifi_files {
+            Some(f) => f,
+            None => {
+                let f = match self.console.run(
+                    "[ -e /sys/class/net/wlan0 ] && echo radio; \
+                     [ -e /var/lib/connman/fenderupdate.config ] && echo fender; true",
+                    Duration::from_secs(10),
+                ) {
+                    Ok((_, out)) => (Some(out.contains("radio")), out.contains("fender")),
+                    Err(_) => return state,
+                };
+                self.wifi_files = Some(f);
+                f
+            }
+        };
+        (state.radio, state.fender_update) = files;
+        state
     }
 
     fn hid_lost(&mut self, error: &str) {
@@ -976,25 +991,25 @@ impl Unit for ConsoleUnit {
         self.console.run("true", Duration::from_secs(3)).is_ok()
     }
 
-    fn wifi_state(&mut self) -> Result<WifiState, String> {
-        let mut state = self.wifi(true, wifi::state)?;
-        (state.radio, state.fender_update) = self.wifi_files();
-        Ok(state)
+    fn wifi_state(&mut self, with_networks: bool) -> Result<WifiState, String> {
+        let state = self.wifi(true, |h| wifi::state(h, with_networks))?;
+        Ok(self.with_wifi_files(state))
     }
 
     fn wifi_scan(&mut self) -> Result<Vec<Network>, String> {
         self.wifi(true, wifi::scan)
     }
 
-    fn wifi_set_enabled(&mut self, on: bool) -> Result<(), String> {
-        self.wifi(false, |h| wifi::set_enabled(h, on))
+    fn wifi_set_enabled(&mut self, on: bool) -> Result<WifiState, String> {
+        let state = self.wifi(false, |h| wifi::set_enabled(h, on))?;
+        Ok(self.with_wifi_files(state))
     }
 
     fn wifi_join(&mut self, join: &Join) -> Result<JoinOutcome, String> {
         self.wifi(false, |h| wifi::join(h, join))
     }
 
-    fn wifi_forget(&mut self, ssid: &str, security: u32) -> Result<(), String> {
+    fn wifi_forget(&mut self, ssid: &str, security: u32) -> Result<ForgetOutcome, String> {
         self.wifi(false, |h| wifi::forget_network(h, ssid, security))
     }
 }
@@ -1320,10 +1335,10 @@ impl Unit for SimUnit {
         Self::with(|s| s.offline_until.is_none_or(|t| Instant::now() >= t))
     }
 
-    fn wifi_state(&mut self) -> Result<WifiState, String> {
+    fn wifi_state(&mut self, with_networks: bool) -> Result<WifiState, String> {
         sim_wifi_reachable()?;
         std::thread::sleep(Duration::from_millis(300));
-        Ok(Self::with(|s| s.wifi.state()))
+        Ok(Self::with(|s| s.wifi.state(with_networks)))
     }
 
     fn wifi_scan(&mut self) -> Result<Vec<Network>, String> {
@@ -1332,17 +1347,17 @@ impl Unit for SimUnit {
         Ok(Self::with(|s| s.wifi.networks()))
     }
 
-    fn wifi_set_enabled(&mut self, on: bool) -> Result<(), String> {
+    fn wifi_set_enabled(&mut self, on: bool) -> Result<WifiState, String> {
         sim_wifi_reachable()?;
         std::thread::sleep(Duration::from_millis(1200));
-        Self::with(|s| s.wifi.set_enabled(on))
+        Self::with(|s| {
+            s.wifi.set_enabled(on)?;
+            Ok(s.wifi.state(false))
+        })
     }
 
     fn wifi_join(&mut self, join: &Join) -> Result<JoinOutcome, String> {
         sim_wifi_reachable()?;
-        if let Some(e) = wifi::check_join(join) {
-            return Err(e);
-        }
         if sim_wifi().as_deref() == Some("silent") {
             std::thread::sleep(Duration::from_secs(6));
             return Ok(JoinOutcome::NoResponse);
@@ -1351,10 +1366,10 @@ impl Unit for SimUnit {
         Ok(Self::with(|s| s.wifi.join(join)))
     }
 
-    fn wifi_forget(&mut self, ssid: &str, security: u32) -> Result<(), String> {
+    fn wifi_forget(&mut self, ssid: &str, security: u32) -> Result<ForgetOutcome, String> {
         sim_wifi_reachable()?;
         std::thread::sleep(Duration::from_millis(600));
-        Self::with(|s| s.wifi.forget(ssid, security))
+        Ok(Self::with(|s| s.wifi.forget(ssid, security)))
     }
 }
 
@@ -1398,44 +1413,39 @@ impl SimWifi {
         let mode = sim_wifi();
         let radio = mode.as_deref() != Some("noradio");
         let on = radio && mode.as_deref() != Some("off");
-        use wifi::{SECURITY_ENTERPRISE as EAP, SECURITY_OPEN as OPEN, SECURITY_PSK as PSK};
-        // (ssid, security, password, signal, saved, hidden). "Rehearsal Room" is saved
-        // with a password that has since changed, so joining it fails.
-        let networks = [
-            ("Studio", PSK, "studio-pass", 72, true, false),
-            ("Rehearsal Room", PSK, "", 55, true, false),
-            ("Cafe Guest", OPEN, "", 41, false, false),
-            ("Neighbours 5G", PSK, "password1", 58, false, false),
-            ("Office", EAP, "", 33, false, false),
-            (
-                "New Router",
-                wifi::SECURITY_UNSUPPORTED,
-                "",
-                50,
-                false,
-                false,
-            ),
-            ("Back Room", PSK, "backroom1", 30, false, true),
-        ];
+        let net = |ssid, security, password, signal| SimNetwork {
+            ssid,
+            security,
+            password,
+            signal,
+            saved: false,
+            hidden: false,
+        };
         SimWifi {
             radio,
             enabled: on,
             saved_enabled: on && mode.as_deref() != Some("differs"),
             connected: on.then_some("Studio"),
             fender_update: mode.as_deref() == Some("fender"),
-            networks: networks
-                .into_iter()
-                .map(
-                    |(ssid, security, password, signal, saved, hidden)| SimNetwork {
-                        ssid,
-                        security,
-                        password,
-                        signal,
-                        saved,
-                        hidden,
-                    },
-                )
-                .collect(),
+            networks: vec![
+                SimNetwork {
+                    saved: true,
+                    ..net("Studio", wifi::SECURITY_PSK, "studio-pass", 72)
+                },
+                // Saved with a password that has since changed: joining it fails.
+                SimNetwork {
+                    saved: true,
+                    ..net("Rehearsal Room", wifi::SECURITY_PSK, "", 55)
+                },
+                net("Cafe Guest", wifi::SECURITY_OPEN, "", 41),
+                net("Neighbours 5G", wifi::SECURITY_PSK, "password1", 58),
+                net("Office", wifi::SECURITY_ENTERPRISE, "", 33),
+                net("New Router", wifi::SECURITY_UNSUPPORTED, "", 50),
+                SimNetwork {
+                    hidden: true,
+                    ..net("Back Room", wifi::SECURITY_PSK, "backroom1", 30)
+                },
+            ],
         }
     }
 
@@ -1477,11 +1487,15 @@ impl SimWifi {
             .collect()
     }
 
-    fn state(&self) -> WifiState {
+    fn state(&self, with_networks: bool) -> WifiState {
         WifiState {
             status: self.status(),
             saved_enabled: Some(self.saved_enabled),
-            networks: self.networks(),
+            networks: if with_networks {
+                self.networks()
+            } else {
+                Vec::new()
+            },
             radio: Some(self.radio),
             fender_update: self.fender_update,
         }
@@ -1533,18 +1547,20 @@ impl SimWifi {
         JoinOutcome::Connected
     }
 
-    fn forget(&mut self, ssid: &str, security: u32) -> Result<(), String> {
-        let n = self
+    fn forget(&mut self, ssid: &str, security: u32) -> ForgetOutcome {
+        let Some(n) = self
             .networks
             .iter_mut()
             .find(|n| n.ssid == ssid && n.security == security && n.saved)
             .filter(|_| self.enabled)
-            .ok_or("The unit couldn't forget this network. It can only forget a network that's in range.")?;
+        else {
+            return ForgetOutcome::OutOfRange;
+        };
         n.saved = false;
         if self.connected == Some(n.ssid) {
             self.connected = None;
         }
-        Ok(())
+        ForgetOutcome::Forgotten
     }
 }
 

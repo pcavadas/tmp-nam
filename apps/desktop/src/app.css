@@ -456,11 +456,6 @@ h2.t-display {
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-.wifi-card {
-  border: 1px solid var(--sep);
-  border-radius: var(--radius-card);
-  background: var(--bg-subtle);
-}
 .wifi-row {
   display: flex;
   align-items: center;

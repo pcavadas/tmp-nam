@@ -8,9 +8,10 @@
 // with or without the NAM card.
 
 import { useCallback, useRef, useState } from "react";
-import type { NetworkKind } from "../ds";
+import type { Activity, NetworkKind } from "../ds";
 import {
   api,
+  ApiError,
   SECURITY,
   type WifiJoin,
   type WifiJoinOutcome,
@@ -21,7 +22,7 @@ import { errorText } from "../lib/format";
 
 // ── Rules ────────────────────────────────────────────────────────────────────
 
-export function canJoin(security: number): boolean {
+function canJoin(security: number): boolean {
   return security === SECURITY.open || security === SECURITY.psk;
 }
 
@@ -69,7 +70,8 @@ export function ssidError(ssid: string): string | null {
   return null;
 }
 
-const key = (n: { ssid: string; security: number }) =>
+/** A network row's identity: one row per name and security. */
+export const networkKey = (n: { ssid: string; security: number }) =>
   `${String(n.security)}:${n.ssid}`;
 
 /**
@@ -82,10 +84,10 @@ export function visibleNetworks(
 ): WifiNetwork[] {
   const rows = new Map<string, WifiNetwork>();
   for (const n of list) {
-    if (!n.ssid || removed.includes(key(n))) continue;
-    const had = rows.get(key(n));
+    if (!n.ssid || removed.includes(networkKey(n))) continue;
+    const had = rows.get(networkKey(n));
     rows.set(
-      key(n),
+      networkKey(n),
       had
         ? {
             ...had,
@@ -106,11 +108,6 @@ export function visibleNetworks(
 /** The unit reports no Wi-Fi radio. */
 export function noRadio(s: WifiState): boolean {
   return s.radio === false || (s.radio === null && !s.status.mac);
-}
-
-/** Another app holds the HID channel (the backend's message names it). */
-export function channelHeld(message: string): boolean {
-  return message.includes("Pro Control");
 }
 
 /** "0:12". */
@@ -206,8 +203,8 @@ export type WifiActivity =
 
 export interface WifiStore {
   state: WifiState | null;
-  /** Why the state couldn't be read. */
-  readError: string | null;
+  /** Why the state couldn't be read; `held` when another app holds the unit. */
+  readError: { message: string; held: boolean } | null;
   activity: WifiActivity | null;
   /** A scan finished since the page opened: tells "Looking…" from "No networks found". */
   scanned: boolean;
@@ -223,15 +220,20 @@ export interface WifiStore {
   open: () => Promise<void>;
   scan: () => Promise<void>;
   setEnabled: (on: boolean) => Promise<void>;
-  join: (j: WifiJoin, saved: boolean) => Promise<WifiJoinOutcome | null>;
+  join: (j: WifiJoin, saved: boolean) => Promise<void>;
   forget: (n: WifiNetwork) => Promise<void>;
   /** Forget the state when the unit goes away. */
   reset: () => void;
 }
 
+const readFailure = (e: unknown) => ({
+  message: errorText(e),
+  held: e instanceof ApiError && e.code === "channel_held",
+});
+
 export function useWifi(): WifiStore {
   const [state, setState] = useState<WifiState | null>(null);
-  const [readError, setReadError] = useState<string | null>(null);
+  const [readError, setReadError] = useState<WifiStore["readError"]>(null);
   const [activity, setActivity] = useState<WifiActivity | null>(null);
   const [scanned, setScanned] = useState(false);
   const [notice, setNotice] = useState<WifiNotice | null>(null);
@@ -239,15 +241,14 @@ export function useWifi(): WifiStore {
   const [removed, setRemoved] = useState<string[]>([]);
   const running = useRef(false);
 
-  /** One request at a time; false when another one runs. */
+  /** One request at a time: ignored while another one runs. */
   const exclusive = useCallback(
-    async (what: WifiActivity, f: () => Promise<void>): Promise<boolean> => {
-      if (running.current) return false;
+    async (what: WifiActivity, f: () => Promise<void>) => {
+      if (running.current) return;
       running.current = true;
       setActivity(what);
       try {
         await f();
-        return true;
       } finally {
         running.current = false;
         setActivity(null);
@@ -256,11 +257,17 @@ export function useWifi(): WifiStore {
     [],
   );
 
-  const read = useCallback(async () => {
-    const s = await api.wifiState();
-    setState(s);
-    setReadError(null);
-    return s;
+  /** Take a state read; a failed one is shown in place of the page. */
+  const take = useCallback(async (read: Promise<WifiState>) => {
+    try {
+      const s = await read;
+      setState(s);
+      setReadError(null);
+      return s;
+    } catch (e) {
+      setReadError(readFailure(e));
+      return null;
+    }
   }, []);
 
   const scanNow = useCallback(async () => {
@@ -271,17 +278,25 @@ export function useWifi(): WifiStore {
     setRemoved([]);
   }, []);
 
-  const open = useCallback(async () => {
-    setScanned(false);
-    await exclusive({ kind: "reading" }, async () => {
+  /** Scan when Wi-Fi is on, after a read that skipped the networks. */
+  const scanIfOn = useCallback(
+    async (s: WifiState | null) => {
+      setScanned(false);
+      if (!s?.status.enabled || noRadio(s)) return;
       try {
-        const s = await read();
-        if (s.status.enabled && !noRadio(s)) await scanNow();
+        await scanNow();
       } catch (e) {
-        setReadError(errorText(e));
+        setReadError(readFailure(e));
       }
+    },
+    [scanNow],
+  );
+
+  const open = useCallback(async () => {
+    await exclusive({ kind: "reading" }, async () => {
+      await scanIfOn(await take(api.wifiState(false)));
     });
-  }, [exclusive, read, scanNow]);
+  }, [exclusive, take, scanIfOn]);
 
   const scan = useCallback(async () => {
     await exclusive({ kind: "scanning" }, async () => {
@@ -303,28 +318,27 @@ export function useWifi(): WifiStore {
       await exclusive(
         { kind: "switching", on, startedAt: Date.now() },
         async () => {
+          let s: WifiState | null;
           try {
-            await api.wifiSetEnabled(on);
+            s = await take(api.wifiSetEnabled(on));
           } catch {
+            s = null;
+          }
+          if (!s) {
             setNotice({
               tone: "error",
               title: on ? "Wi-Fi didn't turn on" : "Wi-Fi didn't turn off",
               text: "The unit didn't confirm the change. Try again.",
               action: { label: "Try Again", kind: "toggle", on },
             });
+            // The switch returns to the real state.
+            s = await take(api.wifiState(false));
           }
-          // Show the real state either way (the switch returns to it on failure).
-          try {
-            const s = await read();
-            setScanned(false);
-            if (s.status.enabled) await scanNow();
-          } catch (e) {
-            setReadError(errorText(e));
-          }
+          await scanIfOn(s);
         },
       );
     },
-    [exclusive, read, scanNow],
+    [exclusive, take, scanIfOn],
   );
 
   const join = useCallback(
@@ -332,10 +346,10 @@ export function useWifi(): WifiStore {
       setNotice(null);
       const last = { join: j, saved };
       setLastJoin(last);
-      let out: WifiJoinOutcome | null = null;
       await exclusive(
         { kind: "joining", ssid: j.ssid, startedAt: Date.now() },
         async () => {
+          let out: WifiJoinOutcome;
           try {
             out = await api.wifiJoin(j);
           } catch (e) {
@@ -346,19 +360,14 @@ export function useWifi(): WifiStore {
             });
             return;
           }
-          let ipv4 = "";
-          try {
-            ipv4 = (await read()).status.ipv4;
-          } catch (e) {
-            setReadError(errorText(e));
-          }
-          setNotice(joinNotice(out, last, ipv4));
+          // The list too: saved and connected marks changed.
+          const s = await take(api.wifiState(true));
+          setNotice(joinNotice(out, last, s?.status.ipv4 ?? ""));
           if (out === "connected") setLastJoin(null);
         },
       );
-      return out;
     },
-    [exclusive, read],
+    [exclusive, take],
   );
 
   const forget = useCallback(
@@ -366,37 +375,33 @@ export function useWifi(): WifiStore {
       setNotice(null);
       await exclusive({ kind: "forgetting", ssid: n.ssid }, async () => {
         try {
-          await api.wifiForget(n.ssid, n.security);
+          const out = await api.wifiForget(n.ssid, n.security);
+          if (out === "out_of_range") setRemoved((r) => [...r, networkKey(n)]);
+          setNotice(
+            out === "forgotten"
+              ? {
+                  tone: "ok",
+                  title: `Forgot ${n.ssid}`,
+                  text: "The unit deleted its saved password and won't join it again.",
+                }
+              : {
+                  tone: "error",
+                  title: `Couldn't forget ${n.ssid}`,
+                  text: "The unit can only forget a network that's in range, and this one is out of reach now. When it shows in the list again, forget it then.",
+                  action: { label: "Scan Again", kind: "scan" },
+                },
+          );
+        } catch (e) {
           setNotice({
-            tone: "ok",
-            title: `Forgot ${n.ssid}`,
-            text: "The unit deleted its saved password and won't join it again.",
+            tone: "error",
+            title: `Couldn't forget ${n.ssid}`,
+            text: errorText(e),
           });
-        } catch (e) {
-          const message = errorText(e);
-          if (message.includes("in range")) {
-            setRemoved((r) => [...r, key(n)]);
-            setNotice({
-              tone: "error",
-              title: `Couldn't forget ${n.ssid}`,
-              text: "The unit can only forget a network that's in range, and this one is out of reach now. When it shows in the list again, forget it then.",
-              action: { label: "Scan Again", kind: "scan" },
-            });
-          } else
-            setNotice({
-              tone: "error",
-              title: `Couldn't forget ${n.ssid}`,
-              text: message,
-            });
         }
-        try {
-          await read();
-        } catch (e) {
-          setReadError(errorText(e));
-        }
+        await take(api.wifiState(true));
       });
     },
-    [exclusive, read],
+    [exclusive, take],
   );
 
   const reset = useCallback(() => {
@@ -433,9 +438,7 @@ export function useWifi(): WifiStore {
 }
 
 /** The sidebar activity card for a Wi-Fi change, or null. */
-export function wifiActivityCard(
-  a: WifiActivity | null,
-): { title: string; detail: string } | null {
+export function wifiActivityCard(a: WifiActivity | null): Activity | null {
   if (a?.kind === "joining")
     return { title: "Joining Wi-Fi", detail: `${a.ssid} · up to 45 s` };
   if (a?.kind === "switching")

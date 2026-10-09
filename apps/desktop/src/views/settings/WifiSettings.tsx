@@ -17,12 +17,18 @@ import {
   Switch,
   TextField,
 } from "../../ds";
-import { api, SECURITY, type WifiNetwork, type WifiState } from "../../lib/api";
+import {
+  api,
+  SECURITY,
+  type WifiJoin,
+  type WifiNetwork,
+  type WifiState,
+} from "../../lib/api";
 import { copyText, defer } from "../../lib/format";
 import { useApp } from "../../state/context";
 import {
   caption,
-  channelHeld,
+  networkKey,
   elapsed,
   noRadio,
   PASSWORD_HELP,
@@ -98,7 +104,7 @@ export function WifiSettings() {
 
   if (!app.connected)
     return (
-      <div className="wifi-card" style={{ marginTop: 12 }}>
+      <div className="tn-card" style={{ marginTop: 12 }}>
         <div className="wifi-row">
           <span className="wifi-title">Wi-Fi</span>
         </div>
@@ -128,7 +134,7 @@ export function WifiSettings() {
         </>
       );
     if (wifi.readError)
-      return channelHeld(wifi.readError) ? (
+      return wifi.readError.held ? (
         <Banner
           tone="warn"
           title="Another app is using the unit"
@@ -146,11 +152,11 @@ export function WifiSettings() {
           actions={[{ label: "Try Again", onClick: () => void open() }]}
           style={{ marginTop: 12 }}
         >
-          {wifi.readError}
+          {wifi.readError.message}
         </Banner>
       );
     return (
-      <div className="wifi-card" style={{ marginTop: 12 }}>
+      <div className="tn-card" style={{ marginTop: 12 }}>
         <div className="wifi-row">
           <Spinner label="Reading the unit's Wi-Fi" />
           <span className="muted">Reading the unit&apos;s Wi-Fi…</span>
@@ -185,31 +191,20 @@ export function WifiSettings() {
         const password =
           action.kind === "retry-sheet" ? last.join.passphrase : "";
         const { ssid, security } = last.join;
-        if (last.join.hidden)
-          setSheet({ kind: "other", ssid, security, password });
-        else if (security === SECURITY.open)
-          setSheet({
-            kind: "open",
-            network: {
-              ssid,
-              security,
-              saved: false,
-              connected: false,
-              signal: 0,
-            },
-          });
-        else
-          setSheet({
-            kind: "join",
-            network: {
-              ssid,
-              security,
-              saved: false,
-              connected: false,
-              signal: 0,
-            },
-            password,
-          });
+        const network = {
+          ssid,
+          security,
+          saved: false,
+          connected: false,
+          signal: 0,
+        };
+        setSheet(
+          last.join.hidden
+            ? { kind: "other", ssid, security, password }
+            : security === SECURITY.open
+              ? { kind: "open", network }
+              : { kind: "join", network, password },
+        );
       }
     }
   };
@@ -373,7 +368,7 @@ function StatusCard({
   else line = <StatusDot tone="off" label="On · not connected to a network" />;
 
   return (
-    <div className="wifi-card" style={{ marginTop: 12 }}>
+    <div className="tn-card" style={{ marginTop: 12 }}>
       <div className="wifi-row">
         <div className="wifi-col" style={{ flex: 1, minWidth: 0 }}>
           <span className="wifi-title" id="wifi-switch-label">
@@ -526,13 +521,12 @@ function Networks({
           const kind = rowKind(n);
           return (
             <NetworkRow
-              key={`${String(n.security)}:${n.ssid}`}
+              key={networkKey(n)}
               name={n.ssid}
               caption={caption(n.security)}
               signal={n.signal}
               kind={kind}
               joining={joiningSsid === n.ssid}
-              disabled={blocked !== null}
               disabledReason={blocked ?? undefined}
               onJoin={() => {
                 if (kind === "saved")
@@ -635,12 +629,7 @@ function WifiSheet({
 }: {
   sheet: SheetState;
   onClose: () => void;
-  onJoin: (j: {
-    ssid: string;
-    security: number;
-    hidden: boolean;
-    passphrase: string;
-  }) => void;
+  onJoin: (j: WifiJoin) => void;
   onForget: (n: WifiNetwork) => void;
 }) {
   switch (sheet.kind) {
@@ -714,12 +703,7 @@ function JoinSheet({
 }: {
   sheet: Extract<SheetState, { kind: "join" }>;
   onClose: () => void;
-  onJoin: (j: {
-    ssid: string;
-    security: number;
-    hidden: boolean;
-    passphrase: string;
-  }) => void;
+  onJoin: (j: WifiJoin) => void;
 }) {
   const { ssid, security } = sheet.network;
   const [password, setPassword] = useState(sheet.password);
@@ -780,12 +764,7 @@ function OtherSheet({
 }: {
   sheet: Extract<SheetState, { kind: "other" }>;
   onClose: () => void;
-  onJoin: (j: {
-    ssid: string;
-    security: number;
-    hidden: boolean;
-    passphrase: string;
-  }) => void;
+  onJoin: (j: WifiJoin) => void;
 }) {
   const [ssid, setSsid] = useState(sheet.ssid);
   const [security, setSecurity] = useState(sheet.security);

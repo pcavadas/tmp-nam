@@ -993,14 +993,18 @@ circle.tn-signal-bar.is-lit {
   fill: var(--text-disabled);
 }
 
+/* Grouped card (Wi-Fi status, network list) */
+.tn-card {
+  border: 1px solid var(--sep);
+  border-radius: var(--radius-card);
+  background: var(--bg-subtle);
+}
+
 /* Network list */
 .tn-netlist {
   list-style: none;
   margin: 0;
   padding: 0;
-  border: 1px solid var(--sep);
-  border-radius: var(--radius-card);
-  background: var(--bg-subtle);
 }
 .tn-netlist-msg {
   display: flex;

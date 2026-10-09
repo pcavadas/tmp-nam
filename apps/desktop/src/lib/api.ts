@@ -264,6 +264,9 @@ export interface WifiJoin {
 export type WifiJoinOutcome =
   "connected" | "wrong_password" | "failed" | "no_response";
 
+/** The unit only forgets a network that's in range. */
+export type WifiForgetOutcome = "forgotten" | "out_of_range";
+
 /** An error from a command that classifies its failures (Tone3000). */
 export class ApiError extends Error {
   constructor(
@@ -335,13 +338,16 @@ export const api = {
   unitSetOptions: (sha256: string, options: PlayerOptionsPatch) =>
     call<string | null>("unit_set_options", { sha256, options }),
 
-  wifiState: () => call<WifiState>("wifi_state"),
+  /** Without networks when a scan follows anyway. */
+  wifiState: (withNetworks: boolean) =>
+    call<WifiState>("wifi_state", { withNetworks }),
   /** A fresh scan; takes a few seconds. */
   wifiScan: () => call<WifiNetwork[]>("wifi_scan"),
-  wifiSetEnabled: (on: boolean) => call<null>("wifi_set_enabled", { on }),
+  /** Resolves to the state the unit confirmed, without networks. */
+  wifiSetEnabled: (on: boolean) => call<WifiState>("wifi_set_enabled", { on }),
   wifiJoin: (join: WifiJoin) => call<WifiJoinOutcome>("wifi_join", { join }),
   wifiForget: (ssid: string, security: number) =>
-    call<null>("wifi_forget", { ssid, security }),
+    call<WifiForgetOutcome>("wifi_forget", { ssid, security }),
   /** The LAN guide's SSH section in the system browser. */
   openLanGuide: () => call<null>("open_lan_guide"),
 

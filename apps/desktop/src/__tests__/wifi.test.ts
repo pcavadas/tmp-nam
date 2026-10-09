@@ -3,7 +3,6 @@ import { signalLevel } from "../ds";
 import { SECURITY, type WifiNetwork, type WifiState } from "../lib/api";
 import {
   caption,
-  channelHeld,
   elapsed,
   joinNotice,
   noRadio,
@@ -129,9 +128,6 @@ describe("Wi-Fi rules", () => {
     expect(noRadio(s(false, "aa"))).toBe(true);
     expect(noRadio(s(null, ""))).toBe(true);
     expect(noRadio(s(true, ""))).toBe(false);
-    expect(
-      channelHeld("… another app (Pro Control or TMP Companion) is holding …"),
-    ).toBe(true);
     expect(elapsed(72_500)).toBe("1:12");
   });
 });

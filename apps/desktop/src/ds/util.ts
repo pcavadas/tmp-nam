@@ -11,12 +11,14 @@ export const CONNECT_STEPS = [
   "Plug the unit's USB-C cable into this computer.",
 ];
 
-export type SignalLevel = "Weak" | "Fair" | "Good" | "Excellent";
+const SIGNAL_LEVELS = ["Weak", "Fair", "Good", "Excellent"] as const;
 
-/** Wi-Fi signal 0–100: under 25 Weak, under 50 Fair, under 75 Good, else Excellent. */
-export function signalLevel(percent: number): SignalLevel {
-  if (percent < 25) return "Weak";
-  if (percent < 50) return "Fair";
-  if (percent < 75) return "Good";
-  return "Excellent";
+/** Wi-Fi signal 0–100 as 0–3 lit bars: under 25, under 50, under 75, else. */
+export function signalBars(percent: number): number {
+  return Math.min(3, Math.max(0, Math.floor(percent / 25)));
+}
+
+/** Weak, Fair, Good or Excellent. */
+export function signalLevel(percent: number): string {
+  return SIGNAL_LEVELS[signalBars(percent)] ?? "Weak";
 }

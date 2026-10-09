@@ -23,6 +23,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::console::{TMP_PID, TMP_VID};
+use crate::proto::{bytes_field, get_bytes, get_varint, nested, parse, varint_field, Val};
 
 const FRAME_START: u8 = 0x33;
 const FRAME_CONTINUE: u8 = 0x34;
@@ -30,107 +31,6 @@ const FRAME_FINAL: u8 = 0x35;
 const FRAME_PAYLOAD: usize = 60;
 const MESSAGE_MAX: usize = 65_535;
 const HEARTBEAT_EVERY: Duration = Duration::from_millis(250);
-
-// ─── protobuf (hand-rolled: a dozen fields, no schema compiler) ─────────────────────
-
-fn put_varint(out: &mut Vec<u8>, mut n: u64) {
-    loop {
-        let b = (n & 0x7f) as u8;
-        n >>= 7;
-        if n == 0 {
-            out.push(b);
-            return;
-        }
-        out.push(b | 0x80);
-    }
-}
-
-pub(crate) fn varint_field(out: &mut Vec<u8>, field: u32, value: u64) {
-    put_varint(out, u64::from(field) << 3);
-    put_varint(out, value);
-}
-
-pub(crate) fn bytes_field(out: &mut Vec<u8>, field: u32, value: &[u8]) {
-    put_varint(out, (u64::from(field) << 3) | 2);
-    put_varint(out, value.len() as u64);
-    out.extend_from_slice(value);
-}
-
-pub(crate) fn nested(field: u32, inner: &[u8]) -> Vec<u8> {
-    let mut out = Vec::new();
-    bytes_field(&mut out, field, inner);
-    out
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) enum Val {
-    Varint(u64),
-    Bytes(Vec<u8>),
-    Fixed,
-}
-
-fn read_varint(buf: &[u8], pos: &mut usize) -> Option<u64> {
-    let mut n = 0u64;
-    for shift in (0..64).step_by(7) {
-        let b = *buf.get(*pos)?;
-        *pos += 1;
-        n |= u64::from(b & 0x7f) << shift;
-        if b & 0x80 == 0 {
-            return Some(n);
-        }
-    }
-    None
-}
-
-/// `(field, value)` pairs; stops at the first malformed field.
-pub(crate) fn parse(buf: &[u8]) -> Vec<(u32, Val)> {
-    let mut out = Vec::new();
-    let mut pos = 0;
-    while pos < buf.len() {
-        let Some(tag) = read_varint(buf, &mut pos) else {
-            break;
-        };
-        let field = (tag >> 3) as u32;
-        let val = match tag & 7 {
-            0 => match read_varint(buf, &mut pos) {
-                Some(v) => Val::Varint(v),
-                None => break,
-            },
-            1 | 5 => {
-                pos += if tag & 7 == 1 { 8 } else { 4 };
-                Val::Fixed
-            }
-            2 => {
-                let Some(len) = read_varint(buf, &mut pos) else {
-                    break;
-                };
-                let Some(end) = pos.checked_add(len as usize).filter(|e| *e <= buf.len()) else {
-                    break;
-                };
-                let v = buf[pos..end].to_vec();
-                pos = end;
-                Val::Bytes(v)
-            }
-            _ => break,
-        };
-        out.push((field, val));
-    }
-    out
-}
-
-pub(crate) fn get_bytes(fields: &[(u32, Val)], field: u32) -> Option<&[u8]> {
-    fields.iter().find_map(|(f, v)| match v {
-        Val::Bytes(b) if *f == field => Some(b.as_slice()),
-        _ => None,
-    })
-}
-
-pub(crate) fn get_varint(fields: &[(u32, Val)], field: u32) -> Option<u64> {
-    fields.iter().find_map(|(f, v)| match v {
-        Val::Varint(n) if *f == field => Some(*n),
-        _ => None,
-    })
-}
 
 // ─── FenderMessageTMS builders ──────────────────────────────────────────────────────
 
@@ -378,10 +278,10 @@ impl HidSession {
     pub fn handshake(&mut self) -> Result<(), String> {
         for (msg, ms) in handshake() {
             self.send(&msg)?;
-            self.pump(Duration::from_millis(ms))?;
+            self.drain(Duration::from_millis(ms))?;
         }
         // Let the handshake's streams (preset lists, ~17 KB product profile) finish.
-        self.pump(Duration::from_millis(1500))?;
+        self.drain(Duration::from_millis(1500))?;
         Ok(())
     }
 
@@ -392,23 +292,15 @@ impl HidSession {
             .send(msg)
     }
 
-    /// Read for `d`; returns the `UserIR` events received, or the transport error.
-    fn pump(&mut self, d: Duration) -> Result<Vec<UserIrEvent>, String> {
-        let events: Vec<UserIrEvent> = self
-            .pump_messages(d)?
-            .iter()
-            .filter_map(|m| user_ir_event(m))
-            .collect();
-        for ev in &events {
-            log::debug!("hid <- {ev:?}");
-        }
-        Ok(events)
+    /// Read and drop whatever arrives for `d`, heartbeating.
+    fn drain(&mut self, d: Duration) -> Result<(), String> {
+        let deadline = Instant::now() + d;
+        while self.next_message(deadline)?.is_some() {}
+        Ok(())
     }
 
-    /// Read for `d`; returns every reassembled message, or the transport error.
-    fn pump_messages(&mut self, d: Duration) -> Result<Vec<Vec<u8>>, String> {
-        let deadline = Instant::now() + d;
-        let mut out = Vec::new();
+    /// The next reassembled message, or `None` at `deadline`.
+    fn next_message(&mut self, deadline: Instant) -> Result<Option<Vec<u8>>, String> {
         let mut buf = [0u8; 64];
         while Instant::now() < deadline {
             let n = {
@@ -423,10 +315,10 @@ impl HidSession {
                     .map_err(|e| format!("HID read: {e}"))?
             };
             if let Some(m) = self.rx.push(&buf[..n]) {
-                out.push(m);
+                return Ok(Some(m));
             }
         }
-        Ok(out)
+        Ok(None)
     }
 
     /// Send `msg`, then read for up to `d` until `want` accepts a message. `Ok(None)`
@@ -439,11 +331,9 @@ impl HidSession {
     ) -> Result<Option<T>, String> {
         self.send(msg)?;
         let deadline = Instant::now() + d;
-        while Instant::now() < deadline {
-            for m in self.pump_messages(Duration::from_millis(100))? {
-                if let Some(v) = want(&m) {
-                    return Ok(Some(v));
-                }
+        while let Some(m) = self.next_message(deadline)? {
+            if let Some(v) = want(&m) {
+                return Ok(Some(v));
             }
         }
         Ok(None)
@@ -456,20 +346,19 @@ impl HidSession {
         d: Duration,
         want: impl Fn(&UserIrEvent) -> bool,
     ) -> Result<UserIrEvent, String> {
-        self.send(msg)?;
-        let deadline = Instant::now() + d;
         let mut seen = Vec::new();
-        while Instant::now() < deadline {
-            for ev in self.pump(Duration::from_millis(100))? {
-                if want(&ev) {
-                    return Ok(ev);
-                }
-                seen.push(ev);
+        let found = self.exchange(msg, d, |m| {
+            let ev = user_ir_event(m)?;
+            log::debug!("hid <- {ev:?}");
+            if want(&ev) {
+                return Some(ev);
             }
-        }
-        Err(format!(
-            "no matching UserIR reply in {d:?}; other UserIR events: {seen:?}"
-        ))
+            seen.push(ev);
+            None
+        })?;
+        found.ok_or_else(|| {
+            format!("no matching UserIR reply in {d:?}; other UserIR events: {seen:?}")
+        })
     }
 
     /// The library as the server holds it (`userIRListRequest`, no batch).

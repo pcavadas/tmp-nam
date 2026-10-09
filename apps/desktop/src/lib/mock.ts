@@ -37,6 +37,7 @@ import type {
   T3kTone,
   Variant,
   WifiJoin,
+  WifiForgetOutcome,
   WifiJoinOutcome,
   WifiNetwork,
   WifiState,
@@ -330,7 +331,7 @@ let seeded: MockWifi | null = null;
 const mockWifi = () => (seeded ??= seedWifi());
 
 function wifiReachable() {
-  if (flag("wifi") === "nohid") throw new Error(WIFI_NO_HID);
+  if (flag("wifi") === "nohid") throw new ApiError("channel_held", WIFI_NO_HID);
 }
 
 function wifiNetworks(): WifiNetwork[] {
@@ -345,7 +346,7 @@ function wifiNetworks(): WifiNetwork[] {
   }));
 }
 
-function wifiState(): WifiState {
+function wifiState(withNetworks: boolean): WifiState {
   const wifi = mockWifi();
   const current = wifi.networks.find((n) => n.ssid === wifi.connected);
   return {
@@ -358,7 +359,7 @@ function wifiState(): WifiState {
       security: current?.security ?? 0,
     },
     saved_enabled: wifi.savedEnabled,
-    networks: wifiNetworks(),
+    networks: withNetworks ? wifiNetworks() : [],
     radio: wifi.radio,
     fender_update: wifi.fenderUpdate,
   };
@@ -396,17 +397,15 @@ function wifiJoin(j: WifiJoin): WifiJoinOutcome {
   return "connected";
 }
 
-function wifiForget(ssid: string, security: number) {
+function wifiForget(ssid: string, security: number): WifiForgetOutcome {
   const wifi = mockWifi();
   const n = wifi.networks.find(
     (x) => x.ssid === ssid && x.security === security && x.saved,
   );
-  if (!n || !wifi.enabled)
-    throw new Error(
-      "The unit couldn't forget this network. It can only forget a network that's in range.",
-    );
+  if (!n || !wifi.enabled) return "out_of_range";
   n.saved = false;
   if (wifi.connected === n.ssid) wifi.connected = null;
+  return "forgotten";
 }
 
 /** Tests start each case from the seeded Wi-Fi. */
@@ -613,7 +612,7 @@ export async function mockInvoke(
     case "wifi_state":
       wifiReachable();
       await sleep(300);
-      return wifiState();
+      return wifiState(args.withNetworks as boolean);
     case "wifi_scan":
       wifiReachable();
       await sleep(2500);
@@ -622,7 +621,7 @@ export async function mockInvoke(
       wifiReachable();
       await sleep(1200);
       wifiSetEnabled(args.on as boolean);
-      return null;
+      return wifiState(false);
     case "wifi_join": {
       wifiReachable();
       if (flag("wifi") === "silent") {
@@ -635,8 +634,7 @@ export async function mockInvoke(
     case "wifi_forget":
       wifiReachable();
       await sleep(600);
-      wifiForget(args.ssid as string, args.security as number);
-      return null;
+      return wifiForget(args.ssid as string, args.security as number);
     case "settings_get":
       return settings;
     case "settings_set": {

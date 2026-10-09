@@ -8,6 +8,7 @@ mod console;
 mod hid;
 mod installs;
 mod pending;
+mod proto;
 mod sdcard;
 mod settings;
 mod t3k;
@@ -463,45 +464,66 @@ async fn unit_set_options(
 //
 // Network names and passwords stay out of the log: it goes into Copy Diagnostics.
 
-#[tauri::command]
-async fn wifi_state(state: State<'_, AppState>) -> Result<wifi::WifiState, String> {
-    let state = state.inner().clone();
-    blocking(move || with_unit(&state, |u| u.wifi_state()))
+/// A Wi-Fi error the UI can branch on: `channel_held` when another app holds the HID
+/// channel, `other` otherwise.
+fn wifi_error(message: String) -> ApiError {
+    log::warn!("wifi: {message}");
+    let code = if message == unit::WIFI_NO_HID {
+        "channel_held"
+    } else {
+        "other"
+    };
+    ApiError { code, message }
+}
+
+/// Run a Wi-Fi request against the connected unit, off the async runtime.
+async fn wifi_call<T: Send + 'static>(
+    state: &AppState,
+    f: impl FnOnce(&mut dyn Unit) -> Result<T, String> + Send + 'static,
+) -> Result<T, ApiError> {
+    let state = state.clone();
+    blocking(move || with_unit(&state, f))
         .await
-        .inspect_err(|e| log::warn!("wifi state failed: {e}"))
+        .map_err(wifi_error)
 }
 
 #[tauri::command]
-async fn wifi_scan(state: State<'_, AppState>) -> Result<Vec<wifi::Network>, String> {
-    let state = state.inner().clone();
-    blocking(move || with_unit(&state, |u| u.wifi_scan()))
-        .await
-        .inspect_err(|e| log::warn!("wifi scan failed: {e}"))
+async fn wifi_state(
+    state: State<'_, AppState>,
+    with_networks: bool,
+) -> Result<wifi::WifiState, ApiError> {
+    wifi_call(state.inner(), move |u| u.wifi_state(with_networks)).await
 }
 
 #[tauri::command]
-async fn wifi_set_enabled(state: State<'_, AppState>, on: bool) -> Result<(), String> {
-    let state = state.inner().clone();
+async fn wifi_scan(state: State<'_, AppState>) -> Result<Vec<wifi::Network>, ApiError> {
+    wifi_call(state.inner(), |u| u.wifi_scan()).await
+}
+
+#[tauri::command]
+async fn wifi_set_enabled(
+    state: State<'_, AppState>,
+    on: bool,
+) -> Result<wifi::WifiState, ApiError> {
     log::info!("wifi {}", if on { "on" } else { "off" });
-    blocking(move || with_unit(&state, |u| u.wifi_set_enabled(on)))
-        .await
-        .inspect_err(|e| log::warn!("wifi on/off failed: {e}"))
+    wifi_call(state.inner(), move |u| u.wifi_set_enabled(on)).await
 }
 
 #[tauri::command]
 async fn wifi_join(
     state: State<'_, AppState>,
     join: wifi::Join,
-) -> Result<wifi::JoinOutcome, String> {
-    if let Some(e) = wifi::check_join(&join) {
-        return Err(e);
+) -> Result<wifi::JoinOutcome, ApiError> {
+    if let Some(message) = wifi::check_join(&join) {
+        return Err(ApiError {
+            code: "invalid",
+            message,
+        });
     }
-    let state = state.inner().clone();
     log::info!("wifi join {join:?}");
-    blocking(move || with_unit(&state, |u| u.wifi_join(&join)))
+    wifi_call(state.inner(), move |u| u.wifi_join(&join))
         .await
         .inspect(|o| log::info!("wifi join: {o:?}"))
-        .inspect_err(|e| log::warn!("wifi join failed: {e}"))
 }
 
 #[tauri::command]
@@ -509,12 +531,9 @@ async fn wifi_forget(
     state: State<'_, AppState>,
     ssid: String,
     security: u32,
-) -> Result<(), String> {
-    let state = state.inner().clone();
+) -> Result<wifi::ForgetOutcome, ApiError> {
     log::info!("wifi forget");
-    blocking(move || with_unit(&state, |u| u.wifi_forget(&ssid, security)))
-        .await
-        .inspect_err(|e| log::warn!("wifi forget failed: {e}"))
+    wifi_call(state.inner(), move |u| u.wifi_forget(&ssid, security)).await
 }
 
 // ── Settings ────────────────────────────────────────────────────────────────

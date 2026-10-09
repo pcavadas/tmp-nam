@@ -2,9 +2,7 @@
 
 import type { ReactNode } from "react";
 import { Button, Spinner, Tag } from "./Button";
-import { cx, signalLevel, type SignalLevel } from "./util";
-
-const LEVELS: SignalLevel[] = ["Weak", "Fair", "Good", "Excellent"];
+import { cx, signalBars, signalLevel } from "./util";
 
 /** A Wi-Fi fan with four levels; the percentage is only in the accessible name and tooltip. */
 export function SignalStrength({
@@ -20,7 +18,7 @@ export function SignalStrength({
   showLabel?: boolean;
 }) {
   const level = signalLevel(percent);
-  const lit = LEVELS.indexOf(level);
+  const lit = signalBars(percent);
   const name = `Signal: ${level}, ${String(Math.round(percent))} %`;
   const arc = (i: number) => cx("tn-signal-bar", i <= lit && "is-lit");
   return (
@@ -51,7 +49,6 @@ export function NetworkRow({
   signal,
   kind,
   joining,
-  disabled,
   disabledReason,
   onJoin,
   onForget,
@@ -62,14 +59,14 @@ export function NetworkRow({
   kind: NetworkKind;
   /** This network is being joined. */
   joining?: boolean;
-  disabled?: boolean;
-  /** Tooltip on disabled actions. */
+  /** Set while actions are unavailable; shown as their tooltip. */
   disabledReason?: string;
   onJoin?: () => void;
   onForget?: () => void;
 }) {
   const muted = kind === "unsupported";
-  const title = disabled ? disabledReason : undefined;
+  const disabled = disabledReason !== undefined;
+  const title = disabledReason;
   let actions: ReactNode;
   if (joining)
     actions = (
@@ -140,19 +137,22 @@ export function NetworkList({
 }) {
   if (state === "scanning")
     return (
-      <div className="tn-netlist tn-netlist-msg" aria-live="polite">
+      <div className="tn-card tn-netlist tn-netlist-msg" aria-live="polite">
         <Spinner label="Looking for networks" />
         <span>Looking for networks…</span>
       </div>
     );
   if (state === "empty")
     return (
-      <div className="tn-netlist tn-netlist-msg is-empty" aria-live="polite">
+      <div
+        className="tn-card tn-netlist tn-netlist-msg is-empty"
+        aria-live="polite"
+      >
         {empty}
       </div>
     );
   return (
-    <ul className="tn-netlist" aria-label="Networks">
+    <ul className="tn-card tn-netlist" aria-label="Networks">
       {children}
     </ul>
   );
