@@ -1853,21 +1853,14 @@ mod device_tests {
         let minutes = std::env::var("TMPNAM_PROBE_MINUTES").unwrap_or_else(|_| "20".into());
         let port = find_port().expect("no TMP console port");
         let mut unit = ConsoleUnit::open(&port).expect("open console");
+        let journal = format!("journalctl --no-pager -q --since '-{minutes} min'");
+        let trouble = "'xrun|underrun|overrun|deadline|dropout'";
         for cmd in [
-            format!(
-                "journalctl --no-pager -q --since '-{minutes} min' | \
-                 grep -ciE 'xrun|underrun|overrun|deadline|dropout' || true"
-            ),
-            format!(
-                "journalctl --no-pager -q --since '-{minutes} min' | \
-                 grep -iE 'xrun|underrun|overrun|deadline|dropout' | tail -n 20"
-            ),
-            format!(
-                "journalctl --no-pager -q --since '-{minutes} min' -u connman -u tm-stomp-server \
-                 | tail -n 30"
-            ),
+            format!("{journal} | grep -ciE {trouble} || true"),
+            format!("{journal} | grep -iE {trouble} | tail -n 20"),
+            format!("{journal} -u connman -u tm-stomp-server | tail -n 30"),
             // How much the journal holds at all: an empty window proves nothing.
-            format!("journalctl --no-pager -q --since '-{minutes} min' | wc -l"),
+            format!("{journal} | wc -l"),
             "journalctl --no-pager -q -n 5".to_string(),
             "date".to_string(),
         ] {
