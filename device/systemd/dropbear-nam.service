@@ -4,7 +4,7 @@ After=network.target nam-lan-install.service
 Wants=nam-lan-install.service
 
 [Service]
-ExecStart=/data/nam/bin/dropbear -F -r /data/nam/ssh/ed25519 -B -p 22 -P /data/nam/dropbear.pid
+ExecStart=/usr/local/bin/nam-ssh.sh
 Restart=on-failure
 
 [Install]

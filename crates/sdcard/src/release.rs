@@ -85,6 +85,7 @@ pub struct Assets {
     pub dropbear: Asset,
     pub dropbearkey: Asset,
     pub dropbear_service: Asset,
+    pub ssh_launcher: Asset,
     pub t3k: Asset,
 }
 
@@ -98,6 +99,7 @@ impl Assets {
             &self.dropbear,
             &self.dropbearkey,
             &self.dropbear_service,
+            &self.ssh_launcher,
             &self.t3k,
         ]);
         v

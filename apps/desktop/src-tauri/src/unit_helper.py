@@ -408,7 +408,212 @@ def cmd_opts(args):
     emit(result)
 
 
+# --- SSH access ------------------------------------------------------------
+# The card's launcher (nam-ssh.sh) starts Dropbear at every boot as SSH_STATE
+# says. Root's ~/.ssh/authorized_keys on the card points at SSH_KEYS.
+
+SSH_DIR = "/data/nam/ssh"
+SSH_STATE = SSH_DIR + "/state"
+SSH_KEYS = SSH_DIR + "/authorized_keys"
+SSH_LAUNCHER = "/usr/local/bin/nam-ssh.sh"
+SSH_SERVICE = "dropbear-nam.service"
+KEY_TYPES = {
+    "ssh-ed25519": 256,
+    "ssh-rsa": None,
+    "ecdsa-sha2-nistp256": 256,
+    "ecdsa-sha2-nistp384": 384,
+    "ecdsa-sha2-nistp521": 521,
+}
+
+
+def ssh_string(blob, pos):
+    """(bytes, next position) of an SSH wire string, or (None, pos)."""
+    if pos + 4 > len(blob):
+        return None, pos
+    n = int.from_bytes(blob[pos:pos + 4], "big")
+    end = pos + 4 + n
+    if end > len(blob):
+        return None, pos
+    return blob[pos + 4:end], end
+
+
+def parse_key(line):
+    """A public key line as a dict, or None when it isn't one."""
+    parts = line.strip().split(None, 2)
+    if len(parts) < 2 or parts[0] not in KEY_TYPES:
+        return None
+    try:
+        blob = base64.b64decode(parts[1].encode("ascii"), validate=True)
+    except Exception:
+        return None
+    kind, pos = ssh_string(blob, 0)
+    if kind is None or kind.decode("ascii", "replace") != parts[0]:
+        return None
+    bits = KEY_TYPES[parts[0]]
+    if bits is None:
+        _e, pos = ssh_string(blob, pos)
+        n, pos = ssh_string(blob, pos)
+        if not n:
+            return None
+        bits = int.from_bytes(n, "big").bit_length()
+    digest = hashlib.sha256(blob).digest()
+    fp = base64.b64encode(digest).decode("ascii").rstrip("=")
+    return {
+        "type": parts[0],
+        "bits": bits,
+        "comment": parts[2].strip() if len(parts) > 2 else "",
+        "fingerprint": "SHA256:" + fp,
+        "line": " ".join(parts),
+    }
+
+
+def read_keys():
+    try:
+        with open(SSH_KEYS) as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return []
+    return [k for k in map(parse_key, lines) if k]
+
+
+def write_private(path, text):
+    if not os.path.isdir(SSH_DIR):
+        os.makedirs(SSH_DIR)
+    os.chmod(SSH_DIR, 0o700)
+    tmp = path + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    os.chmod(tmp, 0o600)
+    os.rename(tmp, path)
+
+
+def write_keys(keys):
+    write_private(SSH_KEYS, "".join(k["line"] + "\n" for k in keys))
+
+
+def read_ssh_state():
+    state = {"enabled": False, "mode": "key"}
+    try:
+        with open(SSH_STATE) as f:
+            for row in f.read().splitlines():
+                key, _, value = row.partition("=")
+                if key == "enabled":
+                    state["enabled"] = value.strip() == "1"
+                elif key == "mode" and value.strip() in ("key", "none"):
+                    state["mode"] = value.strip()
+    except OSError:
+        pass
+    return state
+
+
+def write_ssh_state(state):
+    text = "enabled=%d\nmode=%s\n" % (1 if state["enabled"] else 0,
+                                      state["mode"])
+    write_private(SSH_STATE, text)
+
+
+def ssh_running():
+    out = os.popen("systemctl is-active %s 2>/dev/null" % SSH_SERVICE)
+    return out.read().strip() == "active"
+
+
+def ssh_apply():
+    # The launcher exits at once when SSH is off, so restart covers both.
+    os.system("sync; systemctl restart %s >/dev/null 2>&1" % SSH_SERVICE)
+    for _ in range(20):
+        if ssh_running() == read_ssh_state()["enabled"]:
+            return
+        time.sleep(0.25)
+
+
+def ssh_report():
+    if not os.path.exists(SSH_LAUNCHER):
+        emit({"supported": False})
+        return
+    state = read_ssh_state()
+    keys = [dict((k, v) for k, v in key.items() if k != "line")
+            for key in read_keys()]
+    emit({"supported": True, "enabled": state["enabled"],
+          "mode": state["mode"], "running": ssh_running(), "keys": keys})
+
+
+def ssh_require_card():
+    if not os.path.exists(SSH_LAUNCHER):
+        raise SystemExit("card_too_old")
+
+
+def ssh_add(path, keys):
+    """Add the key in file `path` to `keys` unless present; the new list."""
+    with open(path) as f:
+        lines = [l for l in f.read().splitlines() if l.strip()]
+    key = parse_key(lines[0]) if len(lines) == 1 else None
+    if not key:
+        raise SystemExit("invalid_key")
+    if any(k["fingerprint"] == key["fingerprint"] for k in keys):
+        return keys, False
+    return keys + [key], True
+
+
+def cmd_ssh_state(_args):
+    ssh_report()
+
+
+def cmd_ssh_set(args):
+    """ssh-set <0|1> <key|none> [keyfile]: store, add the key, apply."""
+    ssh_require_card()
+    enabled, mode = args[0] == "1", args[1]
+    if mode not in ("key", "none"):
+        raise SystemExit("invalid_mode")
+    keys = read_keys()
+    if len(args) > 2:
+        keys, added = ssh_add(args[2], keys)
+        if added:
+            write_keys(keys)
+    if enabled and mode == "key" and not keys:
+        raise SystemExit("no_keys")
+    write_ssh_state({"enabled": enabled, "mode": mode})
+    ssh_apply()
+    ssh_report()
+
+
+def cmd_ssh_add(args):
+    """ssh-add <keyfile>: allow one more key (no restart needed)."""
+    ssh_require_card()
+    keys, added = ssh_add(args[0], read_keys())
+    if not added:
+        raise SystemExit("duplicate")
+    write_keys(keys)
+    os.system("sync")
+    ssh_report()
+
+
+def cmd_ssh_remove(args):
+    """ssh-remove <fingerprint>: removing the last key in Key only turns SSH
+    off, now and at every start."""
+    ssh_require_card()
+    keys = read_keys()
+    left = [k for k in keys if k["fingerprint"] != args[0]]
+    if len(left) == len(keys):
+        raise SystemExit("unknown_key")
+    write_keys(left)
+    state = read_ssh_state()
+    if not left and state["mode"] == "key" and state["enabled"]:
+        state["enabled"] = False
+        write_ssh_state(state)
+        ssh_apply()
+    else:
+        os.system("sync")
+    ssh_report()
+
+
 COMMANDS = {
+    "ssh-state": cmd_ssh_state,
+    "ssh-set": cmd_ssh_set,
+    "ssh-add": cmd_ssh_add,
+    "ssh-remove": cmd_ssh_remove,
     "info": cmd_info,
     "list": cmd_list,
     "register": cmd_register,
