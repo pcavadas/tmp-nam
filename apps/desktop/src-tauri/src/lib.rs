@@ -599,6 +599,14 @@ fn t3k_open_site() -> Result<(), String> {
     t3k::open_browser("https://www.tone3000.com")
 }
 
+/// The LAN guide's SSH section, for Settings › Wi-Fi's "How to secure it".
+#[tauri::command]
+fn open_lan_guide() -> Result<(), String> {
+    t3k::open_browser(
+        "https://github.com/pcavadas/tmp-nam/blob/main/docs/device/lan-access.md#3-exact-ssh-and-helper-installation",
+    )
+}
+
 #[tauri::command]
 fn t3k_cancel_link() {
     t3k::CANCEL_LINK.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -837,6 +845,7 @@ pub fn run() {
             wifi_set_enabled,
             wifi_join,
             wifi_forget,
+            open_lan_guide,
             settings_get,
             settings_set,
             variants_list,

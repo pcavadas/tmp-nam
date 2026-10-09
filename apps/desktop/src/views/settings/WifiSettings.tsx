@@ -1,179 +1,541 @@
-// src/views/settings/WifiSettings.tsx — Settings › Wi-Fi: on/off, status, join and forget.
+// src/views/settings/WifiSettings.tsx — Settings › Wi-Fi (design/HANDOFF.md › Settings › Wi-Fi):
+// result banner, status card, FENDER_UPDATE warning, networks, and the facts about it.
 
-import { useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   Banner,
   Button,
   Checkbox,
   ConnectSteps,
+  NetworkList,
+  NetworkRow,
   Radio,
   Sheet,
+  SignalStrength,
   Spinner,
   StatusDot,
-  Tag,
+  Switch,
   TextField,
 } from "../../ds";
-import { SECURITY, type WifiNetwork } from "../../lib/api";
+import { api, SECURITY, type WifiNetwork, type WifiState } from "../../lib/api";
+import { copyText, defer } from "../../lib/format";
 import { useApp } from "../../state/context";
 import {
-  needsPassword,
+  caption,
+  channelHeld,
+  elapsed,
+  noRadio,
+  PASSWORD_HELP,
   passphraseError,
-  securityLabel,
+  rowKind,
   ssidError,
-  statusLine,
-  unsupportedReason,
-  useWifi,
   visibleNetworks,
   type WifiActivity,
   type WifiStore,
 } from "../../state/wifi";
 
-/** What the join sheet is for: a listed network, or a hidden one typed in. */
-type JoinTarget = { network: WifiNetwork } | { hidden: true };
+type SheetState =
+  | { kind: "join"; network: WifiNetwork; password: string }
+  | { kind: "open"; network: WifiNetwork }
+  | { kind: "other"; ssid: string; security: number; password: string }
+  | { kind: "forget"; network: WifiNetwork };
 
-function activityText(a: WifiActivity): string {
-  switch (a.kind) {
-    case "loading":
-      return "Reading Wi-Fi…";
-    case "scanning":
-      return "Scanning for networks…";
-    case "switching":
-      return a.on ? "Turning Wi-Fi on…" : "Turning Wi-Fi off…";
+const TRANSFER = "Available when the transfer finishes";
+
+/** Why Wi-Fi controls are disabled, or null. */
+function blockedReason(
+  a: WifiActivity | null,
+  transfer: boolean,
+): string | null {
+  if (transfer) return TRANSFER;
+  switch (a?.kind) {
+    case undefined:
+      return null;
     case "joining":
-      return `Joining ${a.ssid}… (up to 45 seconds)`;
+      return "Available when joining finishes";
+    case "switching":
+      return a.on
+        ? "Available when Wi-Fi has turned on"
+        : "Available when Wi-Fi has turned off";
+    case "scanning":
+      return "Available when the scan finishes";
+    case "reading":
+      return "Available when the unit's Wi-Fi has been read";
     case "forgetting":
-      return `Forgetting ${a.ssid}…`;
+      return "Available when forgetting finishes";
   }
+}
+
+/** "0:12 · up to 45 seconds", ticking. */
+function Elapsed({ since, limit }: { since: number; limit: string }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
+    return () => {
+      clearInterval(id);
+    };
+  }, []);
+  return (
+    <span className="small muted3">
+      {elapsed(now - since)} · {limit}
+    </span>
+  );
 }
 
 export function WifiSettings() {
   const app = useApp();
-  const wifi = useWifi(app.connected);
-  const [joining, setJoining] = useState<JoinTarget | null>(null);
-  const [forgetting, setForgetting] = useState<WifiNetwork | null>(null);
+  const { wifi } = app;
+  const transfer = app.op !== null;
+  const { open } = wifi;
+  const [sheet, setSheet] = useState<SheetState | null>(null);
+
+  // Read when the page opens, when the unit comes back, and after a transfer.
+  useEffect(() => {
+    if (app.connected && !transfer) defer(open);
+  }, [app.connected, transfer, open]);
 
   if (!app.connected)
     return (
-      <div className="formrow" style={{ borderBottom: 0 }}>
-        <span className="lbl">Wi-Fi</span>
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          <span className="muted" style={{ paddingTop: 5 }}>
-            Shown when the unit is connected.
+      <div className="wifi-card" style={{ marginTop: 12 }}>
+        <div className="wifi-row">
+          <span className="wifi-title">Wi-Fi</span>
+        </div>
+        <div className="wifi-row wifi-col">
+          <StatusDot tone="off" label="Unit not connected" />
+          <span className="small muted">
+            The unit&apos;s Wi-Fi is set up over the USB cable, so this needs
+            the unit.
           </span>
           {app.unit === "missing" && <ConnectSteps />}
+          <span className="small muted3">
+            It&apos;s detected automatically.
+          </span>
         </div>
       </div>
     );
 
-  const { state, activity } = wifi;
-  if (!state)
-    return wifi.error ? (
-      <Banner
-        tone="error"
-        title="Couldn't read the unit's Wi-Fi"
-        actions={[
-          {
-            label: "Try Again",
-            onClick: () => void wifi.refresh(),
-            disabled: !!activity,
-          },
-        ]}
-        style={{ marginTop: 12 }}
-      >
-        {wifi.error}
-      </Banner>
-    ) : (
-      <div className="hrow" style={{ padding: "14px 0" }}>
-        <Spinner label="Reading Wi-Fi" />
-        <span className="muted">Reading Wi-Fi…</span>
+  const { state } = wifi;
+  if (!state) {
+    if (transfer)
+      return (
+        <>
+          <TransferBanner />
+          <p className="small muted" style={{ marginTop: 12 }}>
+            The unit&apos;s Wi-Fi is read when the transfer finishes.
+          </p>
+        </>
+      );
+    if (wifi.readError)
+      return channelHeld(wifi.readError) ? (
+        <Banner
+          tone="warn"
+          title="Another app is using the unit"
+          actions={[{ label: "Try Again", onClick: () => void open() }]}
+          style={{ marginTop: 12 }}
+        >
+          Pro Control or TMP Companion is connected to the Tone Master Pro, so
+          TMP NAM can&apos;t read its Wi-Fi. Quit that app, wait about a minute,
+          then try again.
+        </Banner>
+      ) : (
+        <Banner
+          tone="error"
+          title="Couldn't read the unit's Wi-Fi"
+          actions={[{ label: "Try Again", onClick: () => void open() }]}
+          style={{ marginTop: 12 }}
+        >
+          {wifi.readError}
+        </Banner>
+      );
+    return (
+      <div className="wifi-card" style={{ marginTop: 12 }}>
+        <div className="wifi-row">
+          <Spinner label="Reading the unit's Wi-Fi" />
+          <span className="muted">Reading the unit&apos;s Wi-Fi…</span>
+        </div>
       </div>
     );
+  }
 
-  // A transfer holds the unit; Wi-Fi requests would wait behind it.
-  const blocked = app.busyReason ?? (activity ? activityText(activity) : null);
-  const status = statusLine(state);
-  const noRadio = status.text.startsWith("No Wi-Fi radio");
-  const savedDiffers =
-    state.saved_enabled !== null &&
-    state.saved_enabled !== state.status.enabled;
-  const networks = visibleNetworks(state.networks);
+  const blocked = blockedReason(wifi.activity, transfer);
+  const showList =
+    state.status.enabled &&
+    !noRadio(state) &&
+    !(wifi.activity?.kind === "switching" && !wifi.activity.on);
+
+  const onNotice = () => {
+    const action = wifi.notice?.action;
+    const last = wifi.lastJoin;
+    if (!action) return;
+    switch (action.kind) {
+      case "scan":
+        void wifi.scan();
+        return;
+      case "toggle":
+        void wifi.setEnabled(action.on ?? true);
+        return;
+      case "retry":
+        if (last) void wifi.join(last.join, last.saved);
+        return;
+      case "join-again":
+      case "retry-sheet": {
+        if (!last) return;
+        const password =
+          action.kind === "retry-sheet" ? last.join.passphrase : "";
+        const { ssid, security } = last.join;
+        if (last.join.hidden)
+          setSheet({ kind: "other", ssid, security, password });
+        else if (security === SECURITY.open)
+          setSheet({
+            kind: "open",
+            network: {
+              ssid,
+              security,
+              saved: false,
+              connected: false,
+              signal: 0,
+            },
+          });
+        else
+          setSheet({
+            kind: "join",
+            network: {
+              ssid,
+              security,
+              saved: false,
+              connected: false,
+              signal: 0,
+            },
+            password,
+          });
+      }
+    }
+  };
+
+  const closeSheet = () => {
+    setSheet(null);
+    wifi.forgetPassword();
+  };
 
   return (
     <>
-      {wifi.notice && (
-        <Banner
-          tone={wifi.notice.tone}
-          title={wifi.notice.title}
-          onDismiss={wifi.dismissNotice}
-          style={{ marginTop: 12 }}
-        >
-          {wifi.notice.text}
-        </Banner>
+      {transfer ? (
+        <TransferBanner />
+      ) : (
+        wifi.notice && (
+          <Banner
+            tone={wifi.notice.tone}
+            title={wifi.notice.title}
+            onDismiss={wifi.dismissNotice}
+            actions={
+              wifi.notice.action
+                ? [
+                    {
+                      label: wifi.notice.action.label,
+                      onClick: onNotice,
+                      disabled: blocked !== null,
+                      title: blocked ?? undefined,
+                    },
+                  ]
+                : undefined
+            }
+            style={{ marginTop: 12 }}
+          >
+            {wifi.notice.text}
+          </Banner>
+        )
       )}
-      {state.fender_update && (
+      <StatusCard wifi={wifi} state={state} blocked={blocked} />
+      {state.fender_update && state.status.enabled && (
         <Banner
           tone="warn"
-          title="Fender's update network is stored on the unit"
-          style={{ marginTop: 12 }}
+          title="This unit also joins Fender's update network"
+          style={{ marginTop: 16 }}
         >
-          While Wi-Fi is on, the unit joins any network named FENDER_UPDATE by
-          itself, using Fender&apos;s published password. A factory reset puts
-          this profile back.
+          While Wi-Fi is on, it connects by itself to any network named
+          FENDER_UPDATE, using a password Fender has published. Someone nearby
+          could set up a network with that name and reach the card&apos;s SSH
+          login. Keep Wi-Fi off when you don&apos;t need it.
         </Banner>
       )}
-      <div className="formrow">
-        <span className="lbl">Wi-Fi</span>
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          <Checkbox
-            label="On"
-            checked={state.status.enabled}
-            disabled={!!blocked || noRadio}
-            title={app.busyReason ?? undefined}
-            onChange={(e) => void wifi.setEnabled(e.target.checked)}
-          />
-          <span className="small muted3">
-            Saved on the unit and applied every time it starts, with or without
-            the NAM card.
+      {showList && (
+        <Networks
+          wifi={wifi}
+          state={state}
+          blocked={blocked}
+          onSheet={setSheet}
+        />
+      )}
+      <section className="wifi-about">
+        <h3 className="lbl">About Wi-Fi on the unit</h3>
+        <ul className="small muted">
+          <li>
+            Networks you join, and their passwords, are saved on the unit&apos;s
+            internal storage, unencrypted. They aren&apos;t on the SD card.
+          </li>
+          <li>
+            The unit rejoins them by itself whenever Wi-Fi is on, also when it
+            starts without the NAM card.
+          </li>
+          <li>Forget removes a network and its password from the unit.</li>
+        </ul>
+      </section>
+      {sheet && (
+        <WifiSheet
+          sheet={sheet}
+          onClose={closeSheet}
+          onJoin={(j) => {
+            setSheet(null);
+            void wifi.join(j, false);
+          }}
+          onForget={(n) => {
+            setSheet(null);
+            void wifi.forget(n);
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+function TransferBanner() {
+  return (
+    <Banner tone="info" title={TRANSFER} style={{ marginTop: 12 }}>
+      Captures are being sent over the same USB connection. Wi-Fi settings
+      can&apos;t change until that&apos;s done.
+    </Banner>
+  );
+}
+
+function StatusCard({
+  wifi,
+  state,
+  blocked,
+}: {
+  wifi: WifiStore;
+  state: WifiState;
+  blocked: string | null;
+}) {
+  const { status } = state;
+  const a = wifi.activity;
+  const radioMissing = noRadio(state);
+  const switching = a?.kind === "switching" ? a : null;
+  const joining = a?.kind === "joining" ? a : null;
+  const [copied, setCopied] = useState(false);
+  const connectedRow = state.networks.find((n) => n.connected);
+  const name = status.ssid || "a hidden network";
+  const differs =
+    !radioMissing &&
+    state.saved_enabled !== null &&
+    state.saved_enabled !== status.enabled;
+
+  let line: ReactNode;
+  if (radioMissing)
+    line = (
+      <>
+        <StatusDot tone="off" label="No Wi-Fi radio" />
+        <span className="small muted">
+          This unit doesn&apos;t report a Wi-Fi radio, so its Wi-Fi can&apos;t
+          be set up here.
+        </span>
+      </>
+    );
+  else if (switching)
+    line = (
+      <span className="hrow">
+        <Spinner label={switching.on ? "Turning on" : "Turning off"} />
+        <span>{switching.on ? "Turning on…" : "Turning off…"}</span>
+        <Elapsed since={switching.startedAt} limit="up to 30 seconds" />
+      </span>
+    );
+  else if (joining)
+    line = (
+      <span className="hrow">
+        <Spinner label={`Joining ${joining.ssid}`} />
+        <span>Joining {joining.ssid}…</span>
+        <Elapsed since={joining.startedAt} limit="up to 45 seconds" />
+      </span>
+    );
+  else if (!status.enabled) line = <StatusDot tone="off" label="Off" />;
+  else if (status.connected)
+    line = (
+      <StatusDot
+        tone="ok"
+        label={
+          <span>
+            Connected to <strong>{name}</strong>
+          </span>
+        }
+      />
+    );
+  else line = <StatusDot tone="off" label="On · not connected to a network" />;
+
+  return (
+    <div className="wifi-card" style={{ marginTop: 12 }}>
+      <div className="wifi-row">
+        <div className="wifi-col" style={{ flex: 1, minWidth: 0 }}>
+          <span className="wifi-title" id="wifi-switch-label">
+            Wi-Fi
+          </span>
+          <span className="small muted3" id="wifi-switch-help">
+            Applies every time the unit starts, with or without the NAM card.
           </span>
         </div>
+        <Switch
+          aria-label="Wi-Fi"
+          aria-describedby="wifi-switch-help"
+          checked={switching ? switching.on : status.enabled}
+          busy={switching !== null}
+          disabled={radioMissing || blocked !== null}
+          title={
+            radioMissing
+              ? "This unit has no Wi-Fi radio"
+              : (blocked ?? undefined)
+          }
+          onChange={(on) => void wifi.setEnabled(on)}
+        />
       </div>
-      <div className="formrow">
-        <span className="lbl">Status</span>
-        <div
-          style={{
-            display: "flex",
-            flexDirection: "column",
-            gap: 6,
-            paddingTop: 5,
-          }}
-        >
-          <StatusDot tone={status.tone} label={status.text} />
-          {activity && activity.kind !== "loading" && (
-            <span className="hrow small muted">
-              <Spinner label={activityText(activity)} />
-              {activityText(activity)}
+      <div className="wifi-row wifi-col" aria-live="polite">
+        {line}
+      </div>
+      {status.enabled && status.connected && !switching && (
+        <>
+          <dl className="wifi-facts">
+            <dt>Address</dt>
+            <dd className="hrow">
+              <span className="mono">{status.ipv4 || "—"}</span>
+              {status.ipv4 && (
+                <Button
+                  size="sm"
+                  onClick={() =>
+                    void copyText(status.ipv4).then((err) => {
+                      setCopied(err === null);
+                    })
+                  }
+                >
+                  Copy
+                </Button>
+              )}
+              {copied && <span className="small muted3">Copied</span>}
+            </dd>
+            {connectedRow && (
+              <>
+                <dt>Signal</dt>
+                <dd>
+                  <SignalStrength percent={connectedRow.signal} showLabel />
+                </dd>
+              </>
+            )}
+            <dt>MAC address</dt>
+            <dd className="mono">{status.mac || "—"}</dd>
+          </dl>
+          <div className="wifi-row wifi-warn" role="note">
+            <span>
+              SSH is open on this network. Anyone on {name} can log in to the
+              NAM card as root, with a blank password until you set one or add a
+              key.
             </span>
-          )}
-          {savedDiffers && (
-            <span className="small muted3">
-              The saved setting is {state.saved_enabled ? "On" : "Off"}, so
-              Wi-Fi will be {state.saved_enabled ? "on" : "off"} after the next
-              start.
-            </span>
-          )}
+            <Button
+              size="sm"
+              variant="plain"
+              onClick={() => void api.openLanGuide()}
+            >
+              How to secure it
+            </Button>
+          </div>
+        </>
+      )}
+      {differs && !switching && (
+        <div className="wifi-row">
+          <Banner
+            tone="note"
+            style={{ flex: 1 }}
+            actions={[
+              {
+                label: status.enabled ? "Keep It On" : "Keep It Off",
+                onClick: () => void wifi.setEnabled(status.enabled),
+                disabled: blocked !== null,
+                title: blocked ?? undefined,
+              },
+            ]}
+          >
+            {status.enabled
+              ? "Wi-Fi is on now, but the unit's saved setting is Off, so Wi-Fi will be off after the next start."
+              : "Wi-Fi is off now, but the unit's saved setting is On, so Wi-Fi will be on after the next start."}
+          </Banner>
         </div>
+      )}
+    </div>
+  );
+}
+
+function Networks({
+  wifi,
+  state,
+  blocked,
+  onSheet,
+}: {
+  wifi: WifiStore;
+  state: WifiState;
+  blocked: string | null;
+  onSheet: (s: SheetState) => void;
+}) {
+  const a = wifi.activity;
+  const scanning = a?.kind === "scanning" || a?.kind === "reading";
+  const rows = visibleNetworks(state.networks, wifi.removed);
+  const listState =
+    !wifi.scanned && scanning ? "scanning" : rows.length ? "rows" : "empty";
+  const joiningSsid = a?.kind === "joining" ? a.ssid : null;
+
+  return (
+    <section style={{ marginTop: 20 }}>
+      <div className="wifi-head">
+        <h3 className="lbl">Networks</h3>
+        {scanning ? (
+          <span className="hrow small muted">
+            <Spinner label="Scanning" />
+            Scanning…
+          </span>
+        ) : (
+          <Button
+            size="sm"
+            disabled={blocked !== null}
+            title={blocked ?? undefined}
+            onClick={() => void wifi.scan()}
+          >
+            Scan Again
+          </Button>
+        )}
       </div>
-      {state.status.enabled && (
-        <div className="formrow">
-          <span className="lbl">Networks</span>
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <NetworkList
-              networks={networks}
-              disabled={!!blocked}
-              scanning={activity?.kind === "scanning"}
-              onJoin={(n) => {
-                if (needsPassword(n)) setJoining({ network: n });
-                else
+      <NetworkList
+        state={listState}
+        empty={
+          <>
+            <span style={{ color: "var(--text)" }}>No networks found</span>
+            <span className="small muted">
+              Move the unit closer to the router, then scan again. A network
+              that hides its name doesn&apos;t show here; join it with Other
+              Network…
+            </span>
+          </>
+        }
+      >
+        {rows.map((n) => {
+          const kind = rowKind(n);
+          return (
+            <NetworkRow
+              key={`${String(n.security)}:${n.ssid}`}
+              name={n.ssid}
+              caption={caption(n.security)}
+              signal={n.signal}
+              kind={kind}
+              joining={joiningSsid === n.ssid}
+              disabled={blocked !== null}
+              disabledReason={blocked ?? undefined}
+              onJoin={() => {
+                if (kind === "saved")
                   void wifi.join(
                     {
                       ssid: n.ssid,
@@ -181,289 +543,344 @@ export function WifiSettings() {
                       hidden: false,
                       passphrase: "",
                     },
-                    n.saved,
+                    true,
                   );
+                else if (kind === "open") onSheet({ kind: "open", network: n });
+                else onSheet({ kind: "join", network: n, password: "" });
               }}
-              onForget={setForgetting}
+              onForget={() => {
+                onSheet({ kind: "forget", network: n });
+              }}
             />
-            <div className="hrow">
-              <Button
-                disabled={!!blocked}
-                title={blocked ?? undefined}
-                onClick={() => void wifi.scan()}
-              >
-                Scan Again
-              </Button>
-              <Button
-                disabled={!!blocked}
-                title={blocked ?? undefined}
-                onClick={() => {
-                  setJoining({ hidden: true });
-                }}
-              >
-                Other Network…
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-      <div className="formrow">
-        <span className="lbl">Stored on the unit</span>
-        <span className="small muted" style={{ paddingTop: 5 }}>
-          Joined networks and their passwords are kept on the unit&apos;s
-          internal storage, not on the SD card, and are not encrypted. The unit
-          joins them again by itself, also when it starts without the NAM card.
-          Forget a network to remove it.
-        </span>
-      </div>
-      <div className="formrow" style={{ borderBottom: 0 }}>
-        <span className="lbl">On a network</span>
-        <Banner tone="warn">
-          Anyone on the same network can reach the NAM card&apos;s SSH login
-          (root). It accepts a blank password until you add an SSH key or set a
-          password. See the LAN access guide in the project&apos;s docs.
-        </Banner>
-      </div>
-      {joining && (
-        <JoinSheet
-          target={joining}
-          wifi={wifi}
-          onClose={() => {
-            setJoining(null);
+          );
+        })}
+      </NetworkList>
+      <div className="hrow" style={{ marginTop: 10 }}>
+        <Button
+          disabled={blocked !== null}
+          title={blocked ?? undefined}
+          onClick={() => {
+            onSheet({
+              kind: "other",
+              ssid: "",
+              security: SECURITY.psk,
+              password: "",
+            });
           }}
-        />
-      )}
-      {forgetting && (
+        >
+          Other Network…
+        </Button>
+        <span className="small muted3">For a network that hides its name.</span>
+      </div>
+    </section>
+  );
+}
+
+function SshWarning({ name }: { name: string }) {
+  return (
+    <Banner
+      tone="warn"
+      title="Joining opens the card's SSH login to this network"
+    >
+      Anyone on {name} can log in to the NAM card as root. It accepts a blank
+      password until you set one or add a key.
+    </Banner>
+  );
+}
+
+function PasswordField({
+  value,
+  onChange,
+  error,
+  autoFocus,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  /** Shown in place of the help. */
+  error: string | null;
+  autoFocus?: boolean;
+}) {
+  const [show, setShow] = useState(false);
+  return (
+    <>
+      <TextField
+        label="Password"
+        type={show ? "text" : "password"}
+        value={value}
+        autoFocus={autoFocus}
+        autoComplete="off"
+        spellCheck={false}
+        error={error ?? undefined}
+        help={error ? undefined : PASSWORD_HELP}
+        onChange={(e) => {
+          onChange(e.target.value);
+        }}
+      />
+      <Checkbox
+        label="Show password"
+        checked={show}
+        onChange={(e) => {
+          setShow(e.target.checked);
+        }}
+      />
+    </>
+  );
+}
+
+function WifiSheet({
+  sheet,
+  onClose,
+  onJoin,
+  onForget,
+}: {
+  sheet: SheetState;
+  onClose: () => void;
+  onJoin: (j: {
+    ssid: string;
+    security: number;
+    hidden: boolean;
+    passphrase: string;
+  }) => void;
+  onForget: (n: WifiNetwork) => void;
+}) {
+  switch (sheet.kind) {
+    case "join":
+      return <JoinSheet sheet={sheet} onClose={onClose} onJoin={onJoin} />;
+    case "other":
+      return <OtherSheet sheet={sheet} onClose={onClose} onJoin={onJoin} />;
+    case "open": {
+      const { ssid, security } = sheet.network;
+      return (
         <Sheet
-          alert
-          title={`Forget ${forgetting.ssid}?`}
-          onClose={() => {
-            setForgetting(null);
-          }}
+          title={`Join “${ssid}”?`}
+          onClose={onClose}
           actions={[
+            { label: "Cancel", onClick: onClose, autoFocus: true },
             {
-              label: "Cancel",
+              label: "Join",
+              variant: "primary",
               onClick: () => {
-                setForgetting(null);
+                onJoin({ ssid, security, hidden: false, passphrase: "" });
               },
             },
+          ]}
+        >
+          <div className="wifi-sheet">
+            <p className="muted">
+              {ssid} is open: it has no password, so anyone nearby can join it.
+            </p>
+            <SshWarning name={ssid} />
+            <p className="small muted3">
+              The unit saves the network and rejoins it by itself whenever Wi-Fi
+              is on. Joining can take up to 45 seconds.
+            </p>
+          </div>
+        </Sheet>
+      );
+    }
+    case "forget": {
+      const n = sheet.network;
+      return (
+        <Sheet
+          alert
+          title={`Forget “${n.ssid}”?`}
+          onClose={onClose}
+          actions={[
+            { label: "Cancel", onClick: onClose, autoFocus: true },
             {
               label: "Forget",
               variant: "danger",
-              autoFocus: true,
               onClick: () => {
-                const n = forgetting;
-                setForgetting(null);
-                void wifi.forget(n);
+                onForget(n);
               },
             },
           ]}
         >
           <p className="muted">
-            The unit deletes its saved password and stops joining this network.
-            {forgetting.connected && " It disconnects now."}
+            The unit deletes the saved password and stops joining this network.
+            {n.connected && ` It disconnects from ${n.ssid} now.`} To use it
+            again, join it with its password.
           </p>
         </Sheet>
-      )}
-    </>
-  );
-}
-
-function NetworkList({
-  networks,
-  disabled,
-  scanning,
-  onJoin,
-  onForget,
-}: {
-  networks: WifiNetwork[];
-  disabled: boolean;
-  scanning: boolean;
-  onJoin: (n: WifiNetwork) => void;
-  onForget: (n: WifiNetwork) => void;
-}) {
-  if (networks.length === 0)
-    return (
-      <span className="muted" style={{ paddingTop: 5 }}>
-        {scanning ? "Scanning…" : "No networks found."}
-      </span>
-    );
-  return (
-    <ul className="wifi-list" aria-label="Networks">
-      {networks.map((n) => {
-        const reason = unsupportedReason(n.security);
-        return (
-          <li key={`${String(n.security)}:${n.ssid}`} className="wifi-row">
-            <div className="wifi-name">
-              <span>{n.ssid}</span>
-              <span className="small muted3">
-                {securityLabel(n.security)} · signal {String(n.signal)}%
-              </span>
-            </div>
-            <div className="hrow" style={{ justifyContent: "flex-end" }}>
-              {n.connected ? (
-                <Tag tone="ok">Connected</Tag>
-              ) : (
-                n.saved && <Tag>Saved</Tag>
-              )}
-              {reason ? (
-                <span className="small muted3" title={reason}>
-                  Not supported
-                </span>
-              ) : (
-                !n.connected && (
-                  <Button
-                    size="sm"
-                    disabled={disabled}
-                    onClick={() => {
-                      onJoin(n);
-                    }}
-                  >
-                    {needsPassword(n) ? "Join…" : "Join"}
-                  </Button>
-                )
-              )}
-              {n.saved && (
-                <Button
-                  size="sm"
-                  destructiveText
-                  disabled={disabled}
-                  onClick={() => {
-                    onForget(n);
-                  }}
-                >
-                  Forget…
-                </Button>
-              )}
-            </div>
-          </li>
-        );
-      })}
-    </ul>
-  );
+      );
+    }
+  }
 }
 
 function JoinSheet({
-  target,
-  wifi,
+  sheet,
   onClose,
+  onJoin,
 }: {
-  target: JoinTarget;
-  wifi: WifiStore;
+  sheet: Extract<SheetState, { kind: "join" }>;
   onClose: () => void;
+  onJoin: (j: {
+    ssid: string;
+    security: number;
+    hidden: boolean;
+    passphrase: string;
+  }) => void;
 }) {
-  const hidden = "hidden" in target;
-  const [ssid, setSsid] = useState(hidden ? "" : target.network.ssid);
-  const [security, setSecurity] = useState<number>(
-    hidden ? SECURITY.psk : target.network.security,
-  );
-  const [password, setPassword] = useState("");
-  const [show, setShow] = useState(false);
-  const needs = security === SECURITY.psk;
-  const nameError = hidden ? ssidError(ssid) : null;
-  const passError = needs ? passphraseError(password) : null;
-  const ready = !nameError && !passError;
-
+  const { ssid, security } = sheet.network;
+  const [password, setPassword] = useState(sheet.password);
+  const [tried, setTried] = useState(false);
+  const invalid = passphraseError(password);
   const submit = () => {
-    if (!ready) return;
-    const j = {
-      ssid: hidden ? ssid : target.network.ssid,
-      security,
-      hidden,
-      passphrase: needs ? password : "",
-    };
-    onClose();
-    void wifi.join(j, false);
+    if (invalid) {
+      setTried(true);
+      return;
+    }
+    onJoin({ ssid, security, hidden: false, passphrase: password });
   };
-
   return (
     <Sheet
-      title={hidden ? "Join Other Network" : `Join ${target.network.ssid}`}
+      title={`Join “${ssid}”`}
       onClose={onClose}
       actions={[
         { label: "Cancel", onClick: onClose },
         {
           label: "Join",
           variant: "primary",
-          disabled: !ready,
+          disabled: !!invalid,
           onClick: submit,
         },
       ]}
     >
       <form
-        style={{ display: "flex", flexDirection: "column", gap: 12 }}
+        className="wifi-sheet"
         onSubmit={(e) => {
           e.preventDefault();
           submit();
         }}
       >
-        {hidden && (
-          <>
-            <p className="small muted">
-              For a network that doesn&apos;t broadcast its name. It must be in
-              range.
-            </p>
-            <TextField
-              label="Network name"
-              value={ssid}
-              autoFocus
-              autoComplete="off"
-              spellCheck={false}
-              error={ssid ? (nameError ?? undefined) : undefined}
-              onChange={(e) => {
-                setSsid(e.target.value);
-              }}
-            />
-            <div role="radiogroup" aria-label="Security">
-              <span className="tn-field-label">Security</span>
-              <Radio
-                name="security"
-                label="WPA/WPA2 Personal"
-                checked={security === SECURITY.psk}
-                onChange={() => {
-                  setSecurity(SECURITY.psk);
-                }}
-              />
-              <Radio
-                name="security"
-                label="None (open)"
-                checked={security === SECURITY.open}
-                onChange={() => {
-                  setSecurity(SECURITY.open);
-                }}
-              />
-            </div>
-          </>
+        <PasswordField
+          value={password}
+          autoFocus
+          error={tried ? invalid : null}
+          onChange={(v) => {
+            setPassword(v);
+            setTried(false);
+          }}
+        />
+        <SshWarning name={ssid} />
+        <p className="small muted3">
+          The password goes to the unit over USB and is saved there,
+          unencrypted. Joining can take up to 45 seconds.
+        </p>
+        <button type="submit" hidden />
+      </form>
+    </Sheet>
+  );
+}
+
+function OtherSheet({
+  sheet,
+  onClose,
+  onJoin,
+}: {
+  sheet: Extract<SheetState, { kind: "other" }>;
+  onClose: () => void;
+  onJoin: (j: {
+    ssid: string;
+    security: number;
+    hidden: boolean;
+    passphrase: string;
+  }) => void;
+}) {
+  const [ssid, setSsid] = useState(sheet.ssid);
+  const [security, setSecurity] = useState(sheet.security);
+  const [password, setPassword] = useState(sheet.password);
+  const [tried, setTried] = useState(false);
+  const wpa = security === SECURITY.psk;
+  const nameError = ssidError(ssid);
+  const passError = wpa ? passphraseError(password) : null;
+  // "Too long" shows as soon as it's true; "Enter the name" after a try.
+  const shownNameError =
+    nameError && (tried || new TextEncoder().encode(ssid).length > 32)
+      ? nameError
+      : null;
+  const submit = () => {
+    if (nameError || passError) {
+      setTried(true);
+      return;
+    }
+    onJoin({ ssid, security, hidden: true, passphrase: wpa ? password : "" });
+  };
+  return (
+    <Sheet
+      title="Join a hidden network"
+      onClose={onClose}
+      note="Up to 45 seconds"
+      actions={[
+        { label: "Cancel", onClick: onClose },
+        {
+          label: "Join",
+          variant: "primary",
+          disabled: !!nameError || !!passError,
+          onClick: submit,
+        },
+      ]}
+    >
+      <form
+        className="wifi-sheet"
+        onSubmit={(e) => {
+          e.preventDefault();
+          submit();
+        }}
+      >
+        <p className="small muted">
+          For a network that doesn&apos;t broadcast its name. It has to be in
+          range.
+        </p>
+        <TextField
+          label="Network name"
+          value={ssid}
+          autoFocus
+          autoComplete="off"
+          spellCheck={false}
+          error={shownNameError ?? undefined}
+          help={
+            shownNameError
+              ? undefined
+              : "Exactly as set on the router, up to 32 bytes."
+          }
+          onChange={(e) => {
+            setSsid(e.target.value);
+          }}
+        />
+        <div role="radiogroup" aria-label="Security" className="wifi-col">
+          <span className="tn-field-label">Security</span>
+          <Radio
+            name="security"
+            label="WPA/WPA2 Personal"
+            checked={wpa}
+            onChange={() => {
+              setSecurity(SECURITY.psk);
+            }}
+          />
+          <Radio
+            name="security"
+            label="None (open)"
+            checked={security === SECURITY.open}
+            onChange={() => {
+              setSecurity(SECURITY.open);
+            }}
+          />
+          <span className="small muted3">
+            The unit can&apos;t join WEP, Enterprise or WPA3-only networks.
+          </span>
+        </div>
+        {wpa && (
+          <PasswordField
+            value={password}
+            error={tried ? passError : null}
+            onChange={(v) => {
+              setPassword(v);
+              setTried(false);
+            }}
+          />
         )}
-        {needs && (
-          <>
-            <TextField
-              label="Password"
-              type={show ? "text" : "password"}
-              value={password}
-              autoFocus={!hidden}
-              autoComplete="off"
-              spellCheck={false}
-              error={password ? (passError ?? undefined) : undefined}
-              onChange={(e) => {
-                setPassword(e.target.value);
-              }}
-            />
-            <Checkbox
-              label="Show password"
-              checked={show}
-              onChange={(e) => {
-                setShow(e.target.checked);
-              }}
-            />
-          </>
-        )}
-        {needs && (
-          <p className="small muted3">
-            The password goes to the unit over USB and is saved there.
-          </p>
-        )}
-        {/* Enter submits the form. */}
+        <SshWarning name="it" />
         <button type="submit" hidden />
       </form>
     </Sheet>

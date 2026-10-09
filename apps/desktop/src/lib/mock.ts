@@ -18,9 +18,9 @@
 //   ?t3k=nokey|signedout|list   starting Tone3000 account state
 //   ?sd=tools|assets     missing build tools / damaged app assets
 //   ?tones=0             no tones on the Tone3000 account
-//   ?wifi=off|noradio|nohid|fender|silent   Wi-Fi off, no radio, HID channel held
+//   ?wifi=off|noradio|nohid|fender|silent|differs   Wi-Fi off, no radio, HID channel held
 //                        by another app, FENDER_UPDATE profile present, a join
-//                        that gets no answer
+//                        that gets no answer, saved setting Off while the radio is on
 
 import { ApiError, SECURITY } from "./api";
 import type {
@@ -308,7 +308,7 @@ function seedWifi(): MockWifi {
   return {
     radio,
     enabled: on,
-    savedEnabled: on,
+    savedEnabled: on && mode !== "differs",
     connected: on ? "Studio" : null,
     fenderUpdate: mode === "fender",
     networks: [
@@ -667,6 +667,7 @@ export async function mockInvoke(
       linked = true;
       return "riffwright";
     }
+    case "open_lan_guide":
     case "t3k_open_link_again":
     case "t3k_open_site":
     case "sd_open_privacy_settings":

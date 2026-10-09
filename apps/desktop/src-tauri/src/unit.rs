@@ -1360,7 +1360,8 @@ impl Unit for SimUnit {
 
 /// Simulated Wi-Fi situation (`TMP_NAM_SIM_WIFI`): `off` (radio off), `noradio` (no
 /// `wlan0`), `nohid` (another app holds the HID channel), `fender` (the
-/// `FENDER_UPDATE` file is present), `silent` (a join gets no answer).
+/// `FENDER_UPDATE` file is present), `silent` (a join gets no answer), `differs` (the
+/// saved setting is off while the radio is on).
 fn sim_wifi() -> Option<String> {
     std::env::var("TMP_NAM_SIM_WIFI")
         .ok()
@@ -1419,7 +1420,7 @@ impl SimWifi {
         SimWifi {
             radio,
             enabled: on,
-            saved_enabled: on,
+            saved_enabled: on && mode.as_deref() != Some("differs"),
             connected: on.then_some("Studio"),
             fender_update: mode.as_deref() == Some("fender"),
             networks: networks

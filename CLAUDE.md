@@ -31,7 +31,7 @@ scripts/check.sh quick                     # syntax + helper tests + release-pin
 scripts/check.sh all                       # + cargo test/clippy -D warnings + desktop typecheck/lint/vitest
 cargo test --workspace                     # Rust (crates/sdcard + app backend, incl. pty console tests)
 cargo test -p tmp-sdcard --test release    # device/ assets, player sources, licenses vs release.json
-cd apps/desktop && bun run tauri dev       # TMP_NAM_SIM=1 → simulated unit (TMP_NAM_SIM_FAIL=disconnect|restart|drop, TMP_NAM_SIM_RESTART=1, TMP_NAM_SIM_WIFI=off|noradio|nohid|fender|silent)
+cd apps/desktop && bun run tauri dev       # TMP_NAM_SIM=1 → simulated unit (TMP_NAM_SIM_FAIL=disconnect|restart|drop, TMP_NAM_SIM_RESTART=1, TMP_NAM_SIM_WIFI=off|noradio|nohid|fender|silent|differs)
 cd apps/desktop && bun run dev             # browser + mock; ?fail= ?flags=1 ?t3k= ?sd= ?wifi= reach error screens (src/lib/mock.ts)
 node apps/desktop/scripts/gen-tokens.mjs   # regenerate src/theme/tokens.css after editing tokens.json
 cargo run --release -p tmp-sdcard -- image <ToneMasterPro_v1_8_58.img> <new.img>

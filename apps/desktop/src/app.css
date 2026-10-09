@@ -456,28 +456,80 @@ h2.t-display {
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-.wifi-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+.wifi-card {
   border: 1px solid var(--sep);
-  border-radius: 6px;
+  border-radius: var(--radius-card);
+  background: var(--bg-subtle);
 }
 .wifi-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
+  display: flex;
   align-items: center;
-  padding: 8px 10px;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--sep);
 }
 .wifi-row:last-child {
   border-bottom: 0;
 }
-.wifi-name {
-  display: flex;
+.wifi-col {
   flex-direction: column;
-  gap: 2px;
+  align-items: flex-start;
+  display: flex;
+  gap: var(--space-1);
+}
+.wifi-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+.wifi-facts {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: var(--space-2) var(--space-3);
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--sep);
+  font-size: 12px;
+  align-items: center;
+}
+.wifi-facts dt {
+  color: var(--text-3);
+}
+.wifi-facts dd {
+  margin: 0;
   min-width: 0;
   overflow-wrap: anywhere;
+}
+.wifi-warn {
+  background: var(--warn-weak);
+  color: var(--warn);
+  font-size: 12px;
+  justify-content: space-between;
+  border-radius: 0 0 var(--radius-card) var(--radius-card);
+}
+.wifi-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-2);
+}
+.wifi-head h3,
+.wifi-about h3 {
+  margin: 0;
+}
+.wifi-about {
+  margin-top: var(--space-6);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--sep);
+}
+.wifi-about ul {
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.wifi-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
 }

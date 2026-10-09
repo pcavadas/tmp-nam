@@ -35,7 +35,7 @@ export function Inspector({
   const app = useApp();
   const { capture: c, flag, name } = row;
   const disabled =
-    !app.connected || app.busyReason !== null || app.unit === "busy";
+    !app.connected || app.unitBusyReason !== null || app.unit === "busy";
   const mark = app.marks[name] ?? {};
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
@@ -162,7 +162,7 @@ export function Inspector({
             </Button>
             <Button
               destructiveText
-              disabled={app.busyReason !== null}
+              disabled={app.unitBusyReason !== null}
               onClick={onRemove}
             >
               Remove…
@@ -263,7 +263,7 @@ export function Inspector({
               <Button
                 destructiveText
                 disabled={disabled}
-                title={app.busyReason ?? undefined}
+                title={app.unitBusyReason ?? undefined}
                 onClick={onRemove}
               >
                 Remove from Unit…

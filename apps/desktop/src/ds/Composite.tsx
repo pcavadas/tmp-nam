@@ -107,6 +107,7 @@ export function Sheet({
   alert,
   actions = [],
   extra,
+  note,
   onClose,
   children,
 }: {
@@ -119,6 +120,8 @@ export function Sheet({
   actions?: SheetAction[];
   /** Left-aligned plain button, e.g. "Add More Files…". */
   extra?: SheetAction;
+  /** Left-aligned footer text, e.g. "Up to 45 seconds". */
+  note?: ReactNode;
   onClose?: () => void;
   children?: ReactNode;
 }) {
@@ -153,6 +156,7 @@ export function Sheet({
         </div>
         {(actions.length > 0 || extra) && (
           <div className="tn-sheet-foot">
+            {note && <span className="tn-sheet-note">{note}</span>}
             {extra && (
               <Button
                 variant="plain"

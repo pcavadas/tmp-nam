@@ -2,7 +2,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { api } from "../lib/api";
+import { api, type AddOutcome } from "../lib/api";
 import { resetMockWifi } from "../lib/mock";
 import App from "../App";
 
@@ -345,11 +345,6 @@ describe("Settings › Wi-Fi", () => {
     );
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
     await userEvent.click(screen.getByRole("tab", { name: "Wi-Fi" }));
-    await screen.findByText(
-      "Connected to Studio · 192.168.1.57 · signal 72%",
-      undefined,
-      wait,
-    );
     // The page scans when it opens; actions wait for it.
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Scan Again" })).toBeEnabled();
@@ -357,74 +352,296 @@ describe("Settings › Wi-Fi", () => {
     return screen.getByRole("list", { name: "Networks" });
   }
 
-  const row = (list: HTMLElement, ssid: string) => {
-    const r = within(list).getByText(ssid).closest("li");
-    if (!r) throw new Error(`no row for ${ssid}`);
-    return within(r);
-  };
+  const row = (list: HTMLElement, ssid: string) =>
+    within(within(list).getByRole("listitem", { name: ssid }));
+
+  /** A promise the test settles by hand. */
+  function pending<T>() {
+    let settle: (v: T) => void = () => undefined;
+    const promise = new Promise<T>((r) => {
+      settle = r;
+    });
+    return { promise, settle };
+  }
+
+  it("lists networks with actions by type: connected, saved, then signal", async () => {
+    const list = await openWifi();
+    expect(
+      within(list)
+        .getAllByRole("listitem")
+        .map((li) => li.getAttribute("aria-label")),
+    ).toEqual([
+      "Studio",
+      "Rehearsal Room",
+      "Neighbours 5G",
+      "New Router",
+      "Cafe Guest",
+      "Office",
+    ]);
+    const studio = row(list, "Studio");
+    expect(studio.getByText("Connected")).toBeInTheDocument();
+    expect(
+      studio.getByRole("button", { name: "Forget Studio" }),
+    ).toBeInTheDocument();
+    expect(studio.queryByRole("button", { name: "Join Studio" })).toBeNull();
+    const saved = row(list, "Rehearsal Room");
+    expect(saved.getByText("Saved")).toBeInTheDocument();
+    expect(
+      saved.getByRole("button", { name: "Join Rehearsal Room" }),
+    ).toHaveTextContent(/^Join$/);
+    expect(
+      row(list, "Neighbours 5G").getByRole("button", {
+        name: "Join Neighbours 5G",
+      }),
+    ).toHaveTextContent("Join…");
+    expect(
+      row(list, "Cafe Guest").getByRole("button", { name: "Join Cafe Guest" }),
+    ).toHaveTextContent("Join…");
+    expect(row(list, "Office").getByText("Not supported")).toBeInTheDocument();
+    expect(row(list, "Office").queryByRole("button")).toBeNull();
+    expect(screen.getByRole("switch", { name: "Wi-Fi" })).toBeChecked();
+    expect(screen.getByText("192.168.1.57")).toBeInTheDocument();
+  });
 
   it("joins a new network once the password is valid", async () => {
     const list = await openWifi();
-    expect(row(list, "Office").getByText("Not supported")).toBeInTheDocument();
     await userEvent.click(
-      row(list, "Neighbours 5G").getByRole("button", { name: "Join…" }),
+      row(list, "Neighbours 5G").getByRole("button", {
+        name: "Join Neighbours 5G",
+      }),
     );
-    const sheet = screen.getByRole("dialog", { name: "Join Neighbours 5G" });
+    const sheet = screen.getByRole("dialog", { name: "Join “Neighbours 5G”" });
     const join = within(sheet).getByRole("button", { name: "Join" });
-    await userEvent.type(within(sheet).getByLabelText("Password"), "short");
+    const field = within(sheet).getByLabelText("Password");
+    await userEvent.type(field, "short");
     expect(join).toBeDisabled();
-    expect(within(sheet).getByText(/8 to 63 characters/)).toBeInTheDocument();
-    await userEvent.type(within(sheet).getByLabelText("Password"), "x");
-    await userEvent.clear(within(sheet).getByLabelText("Password"));
-    await userEvent.type(within(sheet).getByLabelText("Password"), "password1");
-    await userEvent.click(join);
+    await userEvent.type(field, "{Enter}");
     expect(
-      await screen.findByText("Connected to Neighbours 5G", undefined, wait),
+      within(sheet).getByText(/Use 8 to 63 characters/),
+    ).toBeInTheDocument();
+    await userEvent.clear(field);
+    await userEvent.type(field, "password1{Enter}");
+    expect(
+      await screen.findByText(/^Address 192\.168\.1\.57\./, undefined, wait),
+    ).toBeInTheDocument();
+    expect(
+      row(list, "Neighbours 5G").getByText("Connected"),
     ).toBeInTheDocument();
   });
 
-  it("warns that a rejected saved password made the unit forget it", async () => {
+  it("reports a wrong password for a new network and offers to join again", async () => {
     const list = await openWifi();
     await userEvent.click(
-      row(list, "Rehearsal Room").getByRole("button", { name: "Join" }),
+      row(list, "Neighbours 5G").getByRole("button", {
+        name: "Join Neighbours 5G",
+      }),
+    );
+    await userEvent.type(
+      screen.getByLabelText("Password"),
+      "wrongpass1{Enter}",
     );
     expect(
       await screen.findByText(
-        "Wrong password for Rehearsal Room",
+        "Wrong password for Neighbours 5G",
         undefined,
         wait,
       ),
     ).toBeInTheDocument();
-    expect(screen.getByText(/forgot this network/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Join Again…" }));
     expect(
-      row(list, "Rehearsal Room").queryByText("Saved"),
-    ).not.toBeInTheDocument();
+      screen.getByRole("dialog", { name: "Join “Neighbours 5G”" }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Password")).toHaveValue("");
+  });
+
+  it("says a saved network's password changed and that the unit forgot it", async () => {
+    const list = await openWifi();
+    await userEvent.click(
+      row(list, "Rehearsal Room").getByRole("button", {
+        name: "Join Rehearsal Room",
+      }),
+    );
+    expect(
+      await screen.findByText(
+        "The password for Rehearsal Room has changed",
+        undefined,
+        wait,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/so the unit forgot it/)).toBeInTheDocument();
+    expect(row(list, "Rehearsal Room").queryByText("Saved")).toBeNull();
+    expect(
+      row(list, "Rehearsal Room").getByRole("button", {
+        name: "Join Rehearsal Room",
+      }),
+    ).toHaveTextContent("Join…");
   });
 
   it("forgets a network after confirming", async () => {
     const list = await openWifi();
     await userEvent.click(
-      row(list, "Studio").getByRole("button", { name: "Forget…" }),
+      row(list, "Studio").getByRole("button", { name: "Forget Studio" }),
     );
     const confirm = screen.getByRole("alertdialog", {
-      name: "Forget Studio?",
+      name: "Forget “Studio”?",
     });
+    expect(
+      within(confirm).getByText(/It disconnects from Studio now/),
+    ).toBeInTheDocument();
     await userEvent.click(
       within(confirm).getByRole("button", { name: "Forget" }),
     );
     expect(
       await screen.findByText("Forgot Studio", undefined, wait),
     ).toBeInTheDocument();
-    expect(screen.getByText("On · not connected")).toBeInTheDocument();
+    expect(
+      screen.getByText("On · not connected to a network"),
+    ).toBeInTheDocument();
   });
 
-  it("turns Wi-Fi off and keeps the setting", async () => {
+  it("drops a network it couldn't forget because it's out of range", async () => {
+    const forget = vi
+      .spyOn(api, "wifiForget")
+      .mockRejectedValue(
+        new Error(
+          "The unit couldn't forget this network. It can only forget a network that's in range.",
+        ),
+      );
+    try {
+      const list = await openWifi();
+      await userEvent.click(
+        row(list, "Rehearsal Room").getByRole("button", {
+          name: "Forget Rehearsal Room",
+        }),
+      );
+      await userEvent.click(
+        within(screen.getByRole("alertdialog")).getByRole("button", {
+          name: "Forget",
+        }),
+      );
+      expect(
+        await screen.findByText(
+          "Couldn't forget Rehearsal Room",
+          undefined,
+          wait,
+        ),
+      ).toBeInTheDocument();
+      expect(
+        within(list).queryByRole("listitem", { name: "Rehearsal Room" }),
+      ).toBeNull();
+    } finally {
+      forget.mockRestore();
+    }
+  });
+
+  it("keeps Wi-Fi on when the saved setting says off", async () => {
+    window.history.replaceState(null, "", "/?wifi=differs");
+    resetMockWifi();
+    const set = vi.spyOn(api, "wifiSetEnabled");
+    try {
+      await openWifi();
+      expect(
+        screen.getByText(/the unit's saved setting is Off/),
+      ).toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: "Keep It On" }));
+      await waitFor(() => {
+        expect(
+          screen.queryByText(/the unit's saved setting is Off/),
+        ).toBeNull();
+      }, wait);
+      expect(set).toHaveBeenCalledWith(true);
+      expect(screen.getByRole("switch", { name: "Wi-Fi" })).toBeChecked();
+    } finally {
+      set.mockRestore();
+      window.history.replaceState(null, "", "/");
+    }
+  });
+
+  it("disables Wi-Fi controls and sends while a join runs", async () => {
+    const joining = pending<"connected">();
+    const join = vi.spyOn(api, "wifiJoin").mockReturnValue(joining.promise);
+    try {
+      const list = await openWifi();
+      await userEvent.click(
+        row(list, "Rehearsal Room").getByRole("button", {
+          name: "Join Rehearsal Room",
+        }),
+      );
+      expect(
+        row(list, "Rehearsal Room").getByText("Joining…"),
+      ).toBeInTheDocument();
+      expect(screen.getByText("Joining Rehearsal Room…")).toBeInTheDocument();
+      expect(screen.getByText("Joining Wi-Fi")).toBeInTheDocument();
+      expect(screen.getByRole("switch", { name: "Wi-Fi" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Scan Again" })).toBeDisabled();
+      expect(
+        screen.getByRole("button", { name: "Forget Studio" }),
+      ).toHaveAttribute("title", "Available when joining finishes");
+      await userEvent.click(screen.getByRole("button", { name: /^Captures/ }));
+      const add = screen.getByRole("button", { name: "Add Captures…" });
+      expect(add).toBeDisabled();
+      expect(add).toHaveAttribute(
+        "title",
+        "Available when the Wi-Fi change finishes",
+      );
+      joining.settle("connected");
+      await waitFor(() => {
+        expect(
+          screen.getByRole("button", { name: "Add Captures…" }),
+        ).toBeEnabled();
+      }, wait);
+    } finally {
+      join.mockRestore();
+    }
+  });
+
+  it("disables Wi-Fi settings while captures are sent", async () => {
+    const sending = pending<AddOutcome>();
+    const send = vi.spyOn(api, "unitAddFiles").mockReturnValue(sending.promise);
+    try {
+      await openWifi();
+      await userEvent.click(screen.getByRole("button", { name: /^Captures/ }));
+      await userEvent.click(
+        screen.getByRole("button", { name: "Add Captures…" }),
+      );
+      const sheet = await screen.findByRole("dialog", {
+        name: "Add captures to the unit",
+      });
+      await userEvent.click(
+        await within(sheet).findByRole("button", { name: "Send 3 Captures" }),
+      );
+      await userEvent.click(screen.getByRole("button", { name: "Settings" }));
+      await userEvent.click(screen.getByRole("tab", { name: "Wi-Fi" }));
+      expect(
+        screen.getByText(
+          "Captures are being sent over the same USB connection. Wi-Fi settings can't change until that's done.",
+        ),
+      ).toBeInTheDocument();
+      const toggle = screen.getByRole("switch", { name: "Wi-Fi" });
+      expect(toggle).toBeDisabled();
+      expect(toggle.closest("[title]")).toHaveAttribute(
+        "title",
+        "Available when the transfer finishes",
+      );
+      sending.settle({
+        added: [],
+        failed_after_restart: [],
+        not_sent: [],
+        needs_restart: false,
+      });
+      await waitFor(() => {
+        expect(screen.getByRole("switch", { name: "Wi-Fi" })).toBeEnabled();
+      }, wait);
+    } finally {
+      send.mockRestore();
+    }
+  });
+
+  it("turns Wi-Fi off and hides the networks", async () => {
     await openWifi();
-    await userEvent.click(screen.getByRole("checkbox", { name: "On" }));
+    await userEvent.click(screen.getByRole("switch", { name: "Wi-Fi" }));
     expect(await screen.findByText("Off", undefined, wait)).toBeInTheDocument();
-    expect(
-      screen.queryByRole("list", { name: "Networks" }),
-    ).not.toBeInTheDocument();
-    expect(screen.getByRole("checkbox", { name: "On" })).not.toBeChecked();
+    expect(screen.queryByRole("list", { name: "Networks" })).toBeNull();
+    expect(screen.getByRole("switch", { name: "Wi-Fi" })).not.toBeChecked();
   });
 });

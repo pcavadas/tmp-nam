@@ -10,3 +10,13 @@ export const CONNECT_STEPS = [
   "Wait for the preset screen.",
   "Plug the unit's USB-C cable into this computer.",
 ];
+
+export type SignalLevel = "Weak" | "Fair" | "Good" | "Excellent";
+
+/** Wi-Fi signal 0–100: under 25 Weak, under 50 Fair, under 75 Good, else Excellent. */
+export function signalLevel(percent: number): SignalLevel {
+  if (percent < 25) return "Weak";
+  if (percent < 50) return "Fair";
+  if (percent < 75) return "Good";
+  return "Excellent";
+}

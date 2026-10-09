@@ -342,6 +342,8 @@ export const api = {
   wifiJoin: (join: WifiJoin) => call<WifiJoinOutcome>("wifi_join", { join }),
   wifiForget: (ssid: string, security: number) =>
     call<null>("wifi_forget", { ssid, security }),
+  /** The LAN guide's SSH section in the system browser. */
+  openLanGuide: () => call<null>("open_lan_guide"),
 
   settingsGet: () => call<Settings>("settings_get"),
   settingsSet: (settings: Settings) => call<null>("settings_set", { settings }),

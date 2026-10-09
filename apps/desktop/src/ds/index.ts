@@ -5,3 +5,4 @@ export * from "./Composite";
 export * from "./Controls";
 export * from "./Icon";
 export * from "./util";
+export * from "./Wifi";
