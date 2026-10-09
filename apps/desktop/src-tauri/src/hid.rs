@@ -321,6 +321,26 @@ impl HidSession {
         Ok(None)
     }
 
+    /// Drop what the engine sent while nobody was reading (broadcasts queue up between
+    /// requests), so it can't be taken as the reply to the next one.
+    fn discard_queued(&mut self) -> Result<(), String> {
+        let mut buf = [0u8; 64];
+        loop {
+            let n = self
+                .link
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .dev
+                .read_timeout(&mut buf, 0)
+                .map_err(|e| format!("HID read: {e}"))?;
+            if n == 0 {
+                return Ok(());
+            }
+            // Through the reassembler, so a message split across the cut stays whole.
+            self.rx.push(&buf[..n]);
+        }
+    }
+
     /// Send `msg`, then read for up to `d` until `want` accepts a message. `Ok(None)`
     /// when nothing matched in time; `Err` only for a transport failure.
     pub(crate) fn exchange<T>(
@@ -329,6 +349,7 @@ impl HidSession {
         d: Duration,
         mut want: impl FnMut(&[u8]) -> Option<T>,
     ) -> Result<Option<T>, String> {
+        self.discard_queued()?;
         self.send(msg)?;
         let deadline = Instant::now() + d;
         while let Some(m) = self.next_message(deadline)? {

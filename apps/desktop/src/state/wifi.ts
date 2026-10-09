@@ -226,6 +226,13 @@ export interface WifiStore {
   reset: () => void;
 }
 
+const scanFailed = (e: unknown): WifiNotice => ({
+  tone: "error",
+  title: "Couldn't scan for networks",
+  text: errorText(e),
+  action: { label: "Scan Again", kind: "scan" },
+});
+
 const readFailure = (e: unknown) => ({
   message: errorText(e),
   held: e instanceof ApiError && e.code === "channel_held",
@@ -286,7 +293,7 @@ export function useWifi(): WifiStore {
       try {
         await scanNow();
       } catch (e) {
-        setReadError(readFailure(e));
+        setNotice(scanFailed(e));
       }
     },
     [scanNow],
@@ -303,38 +310,31 @@ export function useWifi(): WifiStore {
       try {
         await scanNow();
       } catch (e) {
-        setNotice({
-          tone: "error",
-          title: "Couldn't scan for networks",
-          text: errorText(e),
-        });
+        setNotice(scanFailed(e));
       }
     });
   }, [exclusive, scanNow]);
 
   const setEnabled = useCallback(
     async (on: boolean) => {
-      setNotice(null);
       await exclusive(
         { kind: "switching", on, startedAt: Date.now() },
         async () => {
-          let s: WifiState | null;
+          setNotice(null);
+          let s: WifiState | null = null;
           try {
-            s = await take(api.wifiSetEnabled(on));
+            s = await api.wifiSetEnabled(on);
+            setState(s);
           } catch {
-            s = null;
-          }
-          if (!s) {
             setNotice({
               tone: "error",
               title: on ? "Wi-Fi didn't turn on" : "Wi-Fi didn't turn off",
               text: "The unit didn't confirm the change. Try again.",
               action: { label: "Try Again", kind: "toggle", on },
             });
-            // The switch returns to the real state.
-            s = await take(api.wifiState(false));
           }
-          await scanIfOn(s);
+          // After a failure the switch returns to the real state.
+          await scanIfOn(s ?? (await take(api.wifiState(false))));
         },
       );
     },
@@ -343,12 +343,12 @@ export function useWifi(): WifiStore {
 
   const join = useCallback(
     async (j: WifiJoin, saved: boolean) => {
-      setNotice(null);
       const last = { join: j, saved };
-      setLastJoin(last);
       await exclusive(
         { kind: "joining", ssid: j.ssid, startedAt: Date.now() },
         async () => {
+          setNotice(null);
+          setLastJoin(last);
           let out: WifiJoinOutcome;
           try {
             out = await api.wifiJoin(j);
@@ -372,8 +372,8 @@ export function useWifi(): WifiStore {
 
   const forget = useCallback(
     async (n: WifiNetwork) => {
-      setNotice(null);
       await exclusive({ kind: "forgetting", ssid: n.ssid }, async () => {
+        setNotice(null);
         try {
           const out = await api.wifiForget(n.ssid, n.security);
           if (out === "out_of_range") setRemoved((r) => [...r, networkKey(n)]);
@@ -409,6 +409,8 @@ export function useWifi(): WifiStore {
     setReadError(null);
     setScanned(false);
     setRemoved([]);
+    setNotice(null);
+    setLastJoin(null);
   }, []);
 
   return {

@@ -312,7 +312,20 @@ pub trait Unit: Send {
     fn wifi_forget(&mut self, ssid: &str, security: u32) -> Result<ForgetOutcome, String>;
 }
 
-/// Why Wi-Fi settings can't reach the engine; `lib.rs` reports it as `channel_held`.
+/// Why Wi-Fi settings can't reach the engine: no permission on the HID device (Linux
+/// without hidraw access), or, usually, another app holding it.
+fn wifi_no_hid(open_error: &str) -> String {
+    if open_error.to_ascii_lowercase().contains("permission") {
+        format!(
+            "TMP NAM isn't allowed to open the unit's control channel (USB HID): {open_error}. \
+             On Linux, give your user access to the unit's /dev/hidraw device."
+        )
+    } else {
+        WIFI_NO_HID.to_string()
+    }
+}
+
+/// Another app holds the HID channel; `lib.rs` reports it as `channel_held`.
 pub const WIFI_NO_HID: &str = "Wi-Fi settings use the unit's control channel, which another app \
 (Pro Control or TMP Companion) is holding. Quit it, then try again in a minute.";
 
@@ -431,9 +444,9 @@ pub struct ConsoleUnit {
     /// The engine's HID channel, opened on first use and kept for the connection: on
     /// macOS a closed exclusive device refuses re-opens for tens of seconds.
     hid: Option<HidSession>,
-    /// When opening it last failed; a failed exclusive open re-arms that lockout, so
-    /// don't retry before `HID_RETRY`.
-    hid_failed: Option<Instant>,
+    /// When and why opening it last failed; a failed exclusive open re-arms that
+    /// lockout, so don't retry before `HID_RETRY`.
+    hid_failed: Option<(Instant, String)>,
     /// `wifi_files`, read once per connection: neither changes while the unit runs.
     wifi_files: Option<(Option<bool>, bool)>,
 }
@@ -646,7 +659,11 @@ impl ConsoleUnit {
     /// The HID channel, opened on first use; `None` while it can't be opened.
     fn open_hid(&mut self) -> Option<&mut HidSession> {
         if self.hid.is_none() {
-            if self.hid_failed.is_some_and(|t| t.elapsed() < HID_RETRY) {
+            if self
+                .hid_failed
+                .as_ref()
+                .is_some_and(|(t, _)| t.elapsed() < HID_RETRY)
+            {
                 return None;
             }
             match HidSession::open() {
@@ -656,7 +673,7 @@ impl ConsoleUnit {
                 }
                 Err(e) => {
                     log::warn!("HID channel unavailable, using engine restarts: {e}");
-                    self.hid_failed = Some(Instant::now());
+                    self.hid_failed = Some((Instant::now(), e));
                     return None;
                 }
             }
@@ -672,7 +689,11 @@ impl ConsoleUnit {
         read: bool,
         f: impl Fn(&mut HidSession) -> Result<T, String>,
     ) -> Result<T, String> {
-        let h = self.open_hid().ok_or_else(|| WIFI_NO_HID.to_string())?;
+        if self.open_hid().is_none() {
+            let why = self.hid_failed.as_ref().map_or("", |(_, e)| e.as_str());
+            return Err(wifi_no_hid(why));
+        }
+        let h = self.hid.as_mut().ok_or("HID channel closed")?;
         let error = match f(h) {
             Ok(v) => return Ok(v),
             Err(e) => e,
@@ -712,7 +733,7 @@ impl ConsoleUnit {
     fn hid_lost(&mut self, error: &str) {
         log::warn!("HID channel lost: {error}");
         self.hid = None;
-        self.hid_failed = Some(Instant::now());
+        self.hid_failed = Some((Instant::now(), error.to_string()));
     }
 
     fn hid(&mut self) -> Result<&mut HidSession, String> {
@@ -1791,6 +1812,37 @@ mod device_tests {
         println!("list: {:?} ({} models)", t1.elapsed(), models.len());
         print_models(&models);
         assert!(unit.alive());
+    }
+
+    /// Wi-Fi as the console and the engine (HID) report it, read-only. Never prints
+    /// ConnMan's service files: they hold passphrases in plain text.
+    #[test]
+    #[ignore = "needs a unit booted from the NAM card on USB; Pro Control closed"]
+    fn device_wifi_read_only() {
+        let port = find_port().expect("no TMP console port");
+        let mut unit = ConsoleUnit::open(&port).expect("open console");
+        for cmd in [
+            "findmnt -n /var/lib; findmnt -n /data",
+            "ls /var/lib/connman",
+            "grep -o '\"wifiEnabled\": *[a-z]*' /data/settings.json",
+            "cat /sys/class/net/wlan0/address",
+            "ip -4 -o addr show wlan0",
+            "systemctl is-active connman; systemctl is-active wifi-always-on",
+            "dbus-send --system --print-reply --dest=net.connman /net/connman/technology/wifi \
+             net.connman.Technology.GetProperties",
+        ] {
+            let (code, out) = unit
+                .console
+                .run(cmd, Duration::from_secs(15))
+                .expect("console");
+            println!("$ {cmd}  (exit {code})\n{}", out.trim_end());
+        }
+        let t = Instant::now();
+        let state = unit.wifi_state(true).expect("wifi state");
+        println!("wifi_state(true) in {:?}: {state:#?}", t.elapsed());
+        let t = Instant::now();
+        let scan = unit.wifi_scan().expect("wifi scan");
+        println!("wifi_scan in {:?}: {scan:#?}", t.elapsed());
     }
 
     /// Adds, configures and removes a throwaway capture through the HID channel; the

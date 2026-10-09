@@ -52,8 +52,11 @@ const TRANSFER = "Available when the transfer finishes";
 function blockedReason(
   a: WifiActivity | null,
   transfer: boolean,
+  working: boolean,
 ): string | null {
   if (transfer) return TRANSFER;
+  // A remove or a size/gain change holds the unit too.
+  if (working) return "Available when the unit is ready";
   switch (a?.kind) {
     case undefined:
       return null;
@@ -165,7 +168,7 @@ export function WifiSettings() {
     );
   }
 
-  const blocked = blockedReason(wifi.activity, transfer);
+  const blocked = blockedReason(wifi.activity, transfer, app.working);
   const showList =
     state.status.enabled &&
     !noRadio(state) &&
@@ -507,14 +510,19 @@ function Networks({
       <NetworkList
         state={listState}
         empty={
-          <>
-            <span style={{ color: "var(--text)" }}>No networks found</span>
-            <span className="small muted">
-              Move the unit closer to the router, then scan again. A network
-              that hides its name doesn&apos;t show here; join it with Other
-              Network…
-            </span>
-          </>
+          wifi.scanned ? (
+            <>
+              <span style={{ color: "var(--text)" }}>No networks found</span>
+              <span className="small muted">
+                Move the unit closer to the router, then scan again. A network
+                that hides its name doesn&apos;t show here; join it with Other
+                Network…
+              </span>
+            </>
+          ) : (
+            // The scan failed; its banner says why.
+            <span className="small muted">Not scanned yet.</span>
+          )
         }
       >
         {rows.map((n) => {

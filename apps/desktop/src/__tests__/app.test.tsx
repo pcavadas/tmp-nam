@@ -633,6 +633,28 @@ describe("Settings › Wi-Fi", () => {
     }
   });
 
+  it("reports a failed scan instead of an empty list", async () => {
+    const scan = vi
+      .spyOn(api, "wifiScan")
+      .mockRejectedValue(new Error("The audio engine didn't answer."));
+    try {
+      render(<App />);
+      await screen.findByRole(
+        "heading",
+        { name: "Fender Deluxe Reverb '65 Vibrato" },
+        wait,
+      );
+      await userEvent.click(screen.getByRole("button", { name: "Settings" }));
+      await userEvent.click(screen.getByRole("tab", { name: "Wi-Fi" }));
+      expect(
+        await screen.findByText("Couldn't scan for networks", undefined, wait),
+      ).toBeInTheDocument();
+      expect(screen.queryByText("No networks found")).toBeNull();
+    } finally {
+      scan.mockRestore();
+    }
+  });
+
   it("turns Wi-Fi off and hides the networks", async () => {
     await openWifi();
     await userEvent.click(screen.getByRole("switch", { name: "Wi-Fi" }));

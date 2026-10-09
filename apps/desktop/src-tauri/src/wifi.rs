@@ -420,13 +420,18 @@ pub fn set_enabled(h: &mut HidSession, on: bool) -> Result<WifiState, String> {
 
 /// Join `j`, already checked with `check_join`.
 pub fn join(h: &mut HidSession, j: &Join) -> Result<JoinOutcome, String> {
-    // ConnMan may keep a hidden network's service nameless after joining it.
-    let joined =
-        |s: &WifiStatus| s.connected && (s.ssid == j.ssid || j.hidden && s.ssid.is_empty());
+    // ConnMan may keep a hidden network's service nameless after joining it, so for a
+    // hidden network a nameless connected status counts, but only as the broadcast
+    // that follows this connect: a status read could describe another hidden network
+    // the unit was already on.
     let outcome = exchange(h, &connect(j), JOIN_WAIT, |e| match e {
         WifiEvent::Error(ERR_INVALID_KEY) => Some(JoinOutcome::WrongPassword),
         WifiEvent::Error(ERR_CONNECT) => Some(JoinOutcome::Failed),
-        WifiEvent::Status(s) if joined(&s) => Some(JoinOutcome::Connected),
+        WifiEvent::Status(s)
+            if s.connected && (s.ssid == j.ssid || j.hidden && s.ssid.is_empty()) =>
+        {
+            Some(JoinOutcome::Connected)
+        }
         _ => None,
     })?;
     if let Some(o) = outcome {
@@ -434,7 +439,7 @@ pub fn join(h: &mut HidSession, j: &Join) -> Result<JoinOutcome, String> {
     }
     // The broadcast can be missed (e.g. already connected to it): ask once.
     let s = status(h)?;
-    Ok(if joined(&s) {
+    Ok(if s.connected && s.ssid == j.ssid {
         JoinOutcome::Connected
     } else {
         JoinOutcome::NoResponse
