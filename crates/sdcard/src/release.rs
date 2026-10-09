@@ -84,8 +84,6 @@ pub struct Assets {
     pub console_setup: Asset,
     pub dropbear: Asset,
     pub dropbearkey: Asset,
-    pub wifi_setup: Asset,
-    pub wifi_service: Asset,
     pub dropbear_service: Asset,
     pub t3k: Asset,
 }
@@ -99,8 +97,6 @@ impl Assets {
             &self.console_setup,
             &self.dropbear,
             &self.dropbearkey,
-            &self.wifi_setup,
-            &self.wifi_service,
             &self.dropbear_service,
             &self.t3k,
         ]);

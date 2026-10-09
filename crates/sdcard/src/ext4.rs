@@ -229,8 +229,6 @@ fn verify(
         (dropin_dir, 0o755),
         (a.dropbear.target.clone(), 0o755),
         (a.dropbearkey.target.clone(), 0o755),
-        (a.wifi_setup.target.clone(), 0o755),
-        (a.wifi_service.target.clone(), 0o644),
         (a.dropbear_service.target.clone(), 0o644),
         (a.t3k.target.clone(), 0o755),
         (layout.lan_setup_target.clone(), 0o755),
@@ -254,8 +252,6 @@ fn verify(
     for x in [
         &a.dropbear,
         &a.dropbearkey,
-        &a.wifi_setup,
-        &a.wifi_service,
         &a.dropbear_service,
         &a.t3k,
     ] {
