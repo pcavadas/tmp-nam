@@ -519,6 +519,8 @@ def ssh_running():
 
 
 def ssh_apply(enabled):
+    """Restart Dropbear as stored; `not_applied` when it doesn't reach that state
+    (the choice stays stored and applies at the next start)."""
     # The launcher exits at once when SSH is off, so restart covers both.
     os.sync()
     os.system("systemctl restart %s >/dev/null 2>&1" % SSH_SERVICE)
@@ -526,6 +528,7 @@ def ssh_apply(enabled):
         if ssh_running() == enabled:
             return
         time.sleep(0.25)
+    raise SystemExit("not_applied")
 
 
 def ssh_report(state, keys):

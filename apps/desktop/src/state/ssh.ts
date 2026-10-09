@@ -100,6 +100,26 @@ const NO_ANSWER =
 const noAnswer = (e: unknown) =>
   !(e instanceof ApiError) || e.code === "no_answer";
 
+const KEY_FAILED =
+  "TMP NAM couldn't create or read this Mac's SSH key (~/.ssh/id_ed25519.pub). Check that the .ssh folder in your home folder isn't locked or read-only, then try again.";
+
+/** Why a change failed, for the codes the unit or the backend answer with;
+ * `otherwise` when the unit didn't answer. */
+export function sshFailure(e: unknown, otherwise: string): string {
+  switch (e instanceof ApiError ? e.code : "") {
+    case "key_failed":
+      return KEY_FAILED;
+    case "card_too_old":
+      return "This NAM card is too old for SSH access settings. Create a new card in SD Card.";
+    case "not_applied":
+      return "The unit kept the change but SSH didn't follow it. Restart the unit, or try again.";
+    case "unknown_key":
+      return "That computer was no longer on the list.";
+    default:
+      return otherwise;
+  }
+}
+
 export interface SshStore {
   state: SshState | null;
   thisComputer: PublicKey | null;
@@ -132,6 +152,16 @@ export function useSsh(): SshStore {
     return v.ssh;
   }, []);
 
+  /** After a failure the unit answered, show what it now stores. */
+  const refresh = useCallback(
+    async (e: unknown) => {
+      if (noAnswer(e) || (e instanceof ApiError && e.code === "key_failed"))
+        return;
+      await api.sshState().then(take, () => undefined);
+    },
+    [take],
+  );
+
   const load = useCallback(async () => {
     await exclusive({ kind: "reading" }, async () => {
       try {
@@ -154,34 +184,39 @@ export function useSsh(): SshStore {
         }
         take(await api.sshSet(true, "key"));
       } catch (e) {
-        const keyFailed = e instanceof ApiError && e.code === "key_failed";
+        await refresh(e);
         setNotice({
           tone: "error",
           title: "SSH access is still off",
-          text: keyFailed
-            ? "TMP NAM couldn't create or read this Mac's SSH key (~/.ssh/id_ed25519.pub). Check that the .ssh folder in your home folder isn't locked or read-only, then try again."
-            : "The unit didn't answer while adding this Mac. Check the USB cable, then try again.",
+          text: sshFailure(
+            e,
+            "The unit didn't answer while adding this Mac. Check the USB cable, then try again.",
+          ),
           action: { label: "Try Again", kind: "enable" },
         });
       }
     });
-  }, [exclusive, setActivity, take, thisComputer]);
+  }, [exclusive, refresh, setActivity, take, thisComputer]);
 
   const disable = useCallback(async () => {
     await exclusive({ kind: "turning-off" }, async () => {
       setNotice(null);
       try {
         take(await api.sshSet(false, null));
-      } catch {
+      } catch (e) {
+        await refresh(e);
         setNotice({
           tone: "error",
           title: "SSH access may still be on",
-          text: "The unit didn't answer. Check the USB cable, then try again. Until it confirms, treat SSH as on.",
+          text: sshFailure(
+            e,
+            "The unit didn't answer. Check the USB cable, then try again. Until it confirms, treat SSH as on.",
+          ),
           action: { label: "Try Again", kind: "disable" },
         });
       }
     });
-  }, [exclusive, take]);
+  }, [exclusive, refresh, take]);
 
   const setMode = useCallback(
     async (mode: SshMode) => {
@@ -189,20 +224,21 @@ export function useSsh(): SshStore {
         setNotice(null);
         try {
           take(await api.sshSet(true, mode));
-        } catch {
+        } catch (e) {
+          await refresh(e);
           setNotice({
             tone: "error",
             title:
               mode === "none"
                 ? "SSH security is still on"
                 : "SSH access still has no security",
-            text: NO_ANSWER,
+            text: sshFailure(e, NO_ANSWER),
             action: { label: "Try Again", kind: "set-mode", mode },
           });
         }
       });
     },
-    [exclusive, take],
+    [exclusive, refresh, take],
   );
 
   const addThisComputer = useCallback(async () => {
@@ -211,16 +247,17 @@ export function useSsh(): SshStore {
       setNotice(null);
       try {
         take(await api.sshAddKey(null));
-      } catch {
+      } catch (e) {
+        await refresh(e);
         setNotice({
           tone: "error",
           title: `Couldn't add ${name}`,
-          text: NO_ANSWER,
+          text: sshFailure(e, NO_ANSWER),
           action: { label: "Try Again", kind: "add-this-computer" },
         });
       }
     });
-  }, [exclusive, take, thisComputer]);
+  }, [exclusive, refresh, take, thisComputer]);
 
   const addKey = useCallback(
     async (text: string, name: string): Promise<AddResult> => {
@@ -275,17 +312,21 @@ export function useSsh(): SshStore {
                   text: "It can't log in to the NAM card anymore.",
                 },
           );
-        } catch {
+        } catch (e) {
+          await refresh(e);
           setNotice({
             tone: "error",
             title: `Couldn't remove ${name}`,
-            text: "The unit didn't answer, so it can still log in. Check the USB cable, then try again.",
+            text: sshFailure(
+              e,
+              "The unit didn't answer, so it can still log in. Check the USB cable, then try again.",
+            ),
             action: { label: "Try Again", kind: "remove", key: k },
           });
         }
       });
     },
-    [exclusive, take],
+    [exclusive, refresh, take],
   );
 
   const reset = useCallback(() => {

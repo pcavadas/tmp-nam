@@ -1102,7 +1102,7 @@ const SSH_KEY_PATH: &str = "/tmp/tmpnam_key.pub";
 
 impl ConsoleUnit {
     /// An `ssh-*` helper command; it answers with the state, or an error code
-    /// (`card_too_old`, `duplicate`, `invalid_key`, `no_keys`, `unknown_key`).
+    /// (`card_too_old`, `duplicate`, `invalid_key`, `no_keys`, `not_applied`, `unknown_key`).
     fn ssh_helper(&mut self, cmd: &str, args: &[String]) -> Result<SshState, String> {
         let v = self.helper(cmd, args, 60)?;
         serde_json::from_value(v).map_err(|e| format!("bad SSH state: {e}"))

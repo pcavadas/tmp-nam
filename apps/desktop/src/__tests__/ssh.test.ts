@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AuthorizedKey, SshState } from "../lib/api";
+import { ApiError, type AuthorizedKey, type SshState } from "../lib/api";
 import {
   isPrivateKey,
   keyName,
@@ -8,6 +8,7 @@ import {
   orderedKeys,
   shortFingerprint,
   sshExposure,
+  sshFailure,
 } from "../state/ssh";
 
 const key = (fingerprint: string, comment = "a@b"): AuthorizedKey => ({
@@ -70,5 +71,20 @@ describe("SSH access rules", () => {
     expect(sshExposure(state({ enabled: true, mode: "none" }))).toBe("none");
     expect(sshExposure(state({ enabled: false, mode: "none" }))).toBeNull();
     expect(sshExposure(state({ supported: false }))).toBe("old");
+  });
+
+  it("says why a change failed, not just that the unit didn't answer", () => {
+    const fallback = "The unit didn't answer.";
+    expect(sshFailure(new ApiError("key_failed", "x"), fallback)).toMatch(
+      /this Mac's SSH key/,
+    );
+    expect(sshFailure(new ApiError("card_too_old", "x"), fallback)).toMatch(
+      /too old/,
+    );
+    expect(sshFailure(new ApiError("not_applied", "x"), fallback)).toMatch(
+      /Restart the unit/,
+    );
+    expect(sshFailure(new ApiError("no_answer", "x"), fallback)).toBe(fallback);
+    expect(sshFailure(new Error("boom"), fallback)).toBe(fallback);
   });
 });

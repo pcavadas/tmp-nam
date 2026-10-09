@@ -93,9 +93,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const unitBusyReason =
     busyReason ??
     (wifi.activity
-      ? "Available when the Wi-Fi change finishes"
+      ? wifi.activity.kind === "reading"
+        ? "Available when the unit's Wi-Fi has been read"
+        : "Available when the Wi-Fi change finishes"
       : ssh.activity
-        ? "Available when the SSH change finishes"
+        ? ssh.activity.kind === "reading"
+          ? "Available when SSH access has been read"
+          : "Available when the SSH change finishes"
         : null);
 
   const run = useCallback(

@@ -549,13 +549,15 @@ async fn wifi_forget(
 // ── SSH access ──────────────────────────────────────────────────────────────
 
 /// An SSH error the UI can branch on: the helper's codes (`card_too_old`,
-/// `duplicate`, `invalid_key`, `no_keys`, `unknown_key`), `no_answer` otherwise.
+/// `duplicate`, `invalid_key`, `no_keys`, `not_applied`, `unknown_key`),
+/// `no_answer` otherwise.
 fn ssh_error(message: String) -> ApiError {
-    const CODES: [&str; 5] = [
+    const CODES: [&str; 6] = [
         "card_too_old",
         "duplicate",
         "invalid_key",
         "no_keys",
+        "not_applied",
         "unknown_key",
     ];
     match CODES.iter().find(|c| **c == message) {

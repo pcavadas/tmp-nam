@@ -490,6 +490,13 @@ class SshAccessTests(unittest.TestCase):
         self.assertEqual((state["enabled"], state["mode"], self.running),
                          (False, "none", False))
 
+    def test_a_server_that_does_not_start_is_reported(self):
+        # The restart leaves Dropbear down.
+        with mock.patch.object(self.helper.os, "system", return_value=0):
+            with self.assertRaises(SystemExit) as e:
+                self.run_cmd("ssh-set", ["1", "none"])
+        self.assertEqual(str(e.exception), "not_applied")
+
     def test_add_rejects_duplicates_several_lines_and_private_keys(self):
         self.run_cmd("ssh-add", [self.key_file(KEYS["rsa"][0])])
         for text, error in (
