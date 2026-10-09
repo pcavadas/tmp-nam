@@ -1,8 +1,9 @@
 // Flows against the in-page mock backend (src/lib/mock.ts), one per page.
-import { render, screen, within, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../lib/api";
+import { resetMockWifi } from "../lib/mock";
 import App from "../App";
 
 const wait = { timeout: 4000 };
@@ -329,5 +330,101 @@ describe("Settings", () => {
     expect(
       screen.getByRole("button", { name: "Copy Diagnostics" }),
     ).toBeInTheDocument();
+  });
+});
+
+describe("Settings › Wi-Fi", () => {
+  beforeEach(resetMockWifi);
+
+  async function openWifi() {
+    render(<App />);
+    await screen.findByRole(
+      "heading",
+      { name: "Fender Deluxe Reverb '65 Vibrato" },
+      wait,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
+    await userEvent.click(screen.getByRole("tab", { name: "Wi-Fi" }));
+    await screen.findByText(
+      "Connected to Studio · 192.168.1.57 · signal 72%",
+      undefined,
+      wait,
+    );
+    // The page scans when it opens; actions wait for it.
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Scan Again" })).toBeEnabled();
+    }, wait);
+    return screen.getByRole("list", { name: "Networks" });
+  }
+
+  const row = (list: HTMLElement, ssid: string) => {
+    const r = within(list).getByText(ssid).closest("li");
+    if (!r) throw new Error(`no row for ${ssid}`);
+    return within(r);
+  };
+
+  it("joins a new network once the password is valid", async () => {
+    const list = await openWifi();
+    expect(row(list, "Office").getByText("Not supported")).toBeInTheDocument();
+    await userEvent.click(
+      row(list, "Neighbours 5G").getByRole("button", { name: "Join…" }),
+    );
+    const sheet = screen.getByRole("dialog", { name: "Join Neighbours 5G" });
+    const join = within(sheet).getByRole("button", { name: "Join" });
+    await userEvent.type(within(sheet).getByLabelText("Password"), "short");
+    expect(join).toBeDisabled();
+    expect(within(sheet).getByText(/8 to 63 characters/)).toBeInTheDocument();
+    await userEvent.type(within(sheet).getByLabelText("Password"), "x");
+    await userEvent.clear(within(sheet).getByLabelText("Password"));
+    await userEvent.type(within(sheet).getByLabelText("Password"), "password1");
+    await userEvent.click(join);
+    expect(
+      await screen.findByText("Connected to Neighbours 5G", undefined, wait),
+    ).toBeInTheDocument();
+  });
+
+  it("warns that a rejected saved password made the unit forget it", async () => {
+    const list = await openWifi();
+    await userEvent.click(
+      row(list, "Rehearsal Room").getByRole("button", { name: "Join" }),
+    );
+    expect(
+      await screen.findByText(
+        "Wrong password for Rehearsal Room",
+        undefined,
+        wait,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/forgot this network/)).toBeInTheDocument();
+    expect(
+      row(list, "Rehearsal Room").queryByText("Saved"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("forgets a network after confirming", async () => {
+    const list = await openWifi();
+    await userEvent.click(
+      row(list, "Studio").getByRole("button", { name: "Forget…" }),
+    );
+    const confirm = screen.getByRole("alertdialog", {
+      name: "Forget Studio?",
+    });
+    await userEvent.click(
+      within(confirm).getByRole("button", { name: "Forget" }),
+    );
+    expect(
+      await screen.findByText("Forgot Studio", undefined, wait),
+    ).toBeInTheDocument();
+    expect(screen.getByText("On · not connected")).toBeInTheDocument();
+  });
+
+  it("turns Wi-Fi off and keeps the setting", async () => {
+    await openWifi();
+    await userEvent.click(screen.getByRole("checkbox", { name: "On" }));
+    expect(await screen.findByText("Off", undefined, wait)).toBeInTheDocument();
+    expect(
+      screen.queryByRole("list", { name: "Networks" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "On" })).not.toBeChecked();
   });
 });

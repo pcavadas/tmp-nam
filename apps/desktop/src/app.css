@@ -456,3 +456,28 @@ h2.t-display {
   white-space: nowrap;
   text-overflow: ellipsis;
 }
+.wifi-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--sep);
+  border-radius: 6px;
+}
+.wifi-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--sep);
+}
+.wifi-row:last-child {
+  border-bottom: 0;
+}
+.wifi-name {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}

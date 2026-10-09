@@ -1,4 +1,4 @@
-// src/views/settings/SettingsPage.tsx — Tone3000 key and account, allowed variants, unit details.
+// src/views/settings/SettingsPage.tsx — Tone3000 key and account, allowed variants, unit details, Wi-Fi.
 
 import { useState } from "react";
 import {
@@ -15,13 +15,15 @@ import { copyText } from "../../lib/format";
 import { useApp } from "../../state/context";
 import { toggled } from "../tone3000/allowed";
 import { VariantColumns } from "../tone3000/Variants";
+import { WifiSettings } from "./WifiSettings";
 
-type Section = "t3k" | "variants" | "unit";
+type Section = "t3k" | "variants" | "unit" | "wifi";
 
 const SECTIONS: { label: string; value: Section }[] = [
   { label: "Tone3000", value: "t3k" },
   { label: "Allowed Variants", value: "variants" },
   { label: "Unit", value: "unit" },
+  { label: "Wi-Fi", value: "wifi" },
 ];
 
 export function SettingsPage() {
@@ -40,6 +42,7 @@ export function SettingsPage() {
         {section === "t3k" && <Tone3000Settings />}
         {section === "variants" && <VariantSettings />}
         {section === "unit" && <UnitSettings />}
+        {section === "wifi" && <WifiSettings />}
       </div>
     </>
   );

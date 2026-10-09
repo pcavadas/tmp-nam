@@ -18,8 +18,11 @@
 //   ?t3k=nokey|signedout|list   starting Tone3000 account state
 //   ?sd=tools|assets     missing build tools / damaged app assets
 //   ?tones=0             no tones on the Tone3000 account
+//   ?wifi=off|noradio|nohid|fender|silent   Wi-Fi off, no radio, HID channel held
+//                        by another app, FENDER_UPDATE profile present, a join
+//                        that gets no answer
 
-import { ApiError } from "./api";
+import { ApiError, SECURITY } from "./api";
 import type {
   AddOutcome,
   PlayerOptionsPatch,
@@ -33,6 +36,10 @@ import type {
   T3kPick,
   T3kTone,
   Variant,
+  WifiJoin,
+  WifiJoinOutcome,
+  WifiNetwork,
+  WifiState,
 } from "./api";
 
 type Handler = (payload: unknown) => void;
@@ -263,6 +270,150 @@ const TONES: T3kTone[] = [
   }),
 ];
 
+// ── Wi-Fi (mirrors `SimWifi`) ──────────────────────────────────────────────
+
+interface MockNetwork {
+  ssid: string;
+  security: number;
+  password: string;
+  signal: number;
+  saved: boolean;
+  hidden: boolean;
+}
+
+const WIFI_NO_HID =
+  "Wi-Fi settings use the unit's control channel, which another app (Pro Control or TMP Companion) is holding. Quit it, then try again in a minute.";
+
+interface MockWifi {
+  radio: boolean;
+  enabled: boolean;
+  savedEnabled: boolean;
+  connected: string | null;
+  fenderUpdate: boolean;
+  networks: MockNetwork[];
+}
+
+function seedWifi(): MockWifi {
+  const mode = flag("wifi");
+  const radio = mode !== "noradio";
+  const on = radio && mode !== "off";
+  const net = (
+    ssid: string,
+    security: number,
+    password: string,
+    signal: number,
+    saved = false,
+    hidden = false,
+  ): MockNetwork => ({ ssid, security, password, signal, saved, hidden });
+  return {
+    radio,
+    enabled: on,
+    savedEnabled: on,
+    connected: on ? "Studio" : null,
+    fenderUpdate: mode === "fender",
+    networks: [
+      net("Studio", SECURITY.psk, "studio-pass", 72, true),
+      // Saved with a password that has since changed: joining it fails.
+      net("Rehearsal Room", SECURITY.psk, "", 55, true),
+      net("Cafe Guest", SECURITY.open, "", 41),
+      net("Neighbours 5G", SECURITY.psk, "password1", 58),
+      net("Office", SECURITY.enterprise, "", 33),
+      net("New Router", SECURITY.unsupported, "", 50),
+      net("Back Room", SECURITY.psk, "backroom1", 30, false, true),
+    ],
+  };
+}
+
+// Seeded on first use: api.ts and this module import each other, so `SECURITY`
+// isn't initialized yet while this module loads.
+let seeded: MockWifi | null = null;
+const mockWifi = () => (seeded ??= seedWifi());
+
+function wifiReachable() {
+  if (flag("wifi") === "nohid") throw new Error(WIFI_NO_HID);
+}
+
+function wifiNetworks(): WifiNetwork[] {
+  const wifi = mockWifi();
+  if (!wifi.enabled) return [];
+  return wifi.networks.map((n) => ({
+    ssid: n.hidden && wifi.connected !== n.ssid ? "" : n.ssid,
+    security: n.security,
+    saved: n.saved,
+    connected: wifi.connected === n.ssid,
+    signal: n.signal,
+  }));
+}
+
+function wifiState(): WifiState {
+  const wifi = mockWifi();
+  const current = wifi.networks.find((n) => n.ssid === wifi.connected);
+  return {
+    status: {
+      enabled: wifi.enabled,
+      connected: !!current,
+      mac: wifi.radio ? "aa:bb:cc:00:11:22" : "",
+      ipv4: current ? "192.168.1.57" : "",
+      ssid: current?.ssid ?? "",
+      security: current?.security ?? 0,
+    },
+    saved_enabled: wifi.savedEnabled,
+    networks: wifiNetworks(),
+    radio: wifi.radio,
+    fender_update: wifi.fenderUpdate,
+  };
+}
+
+function wifiSetEnabled(on: boolean) {
+  const wifi = mockWifi();
+  if (on && !wifi.radio) throw new Error("The unit couldn't turn Wi-Fi on.");
+  wifi.enabled = on;
+  wifi.savedEnabled = on;
+  const best = wifi.networks
+    .filter((n) => n.saved && n.password)
+    .sort((a, b) => b.signal - a.signal)[0];
+  wifi.connected = on && best ? best.ssid : null;
+}
+
+function wifiJoin(j: WifiJoin): WifiJoinOutcome {
+  const wifi = mockWifi();
+  if (!wifi.enabled) return "failed";
+  const n = wifi.networks.find(
+    (x) =>
+      x.ssid === j.ssid && x.security === j.security && x.hidden === j.hidden,
+  );
+  if (!n) return "failed";
+  const keyOk = n.saved
+    ? !!n.password
+    : n.security === SECURITY.open || j.passphrase === n.password;
+  if (!keyOk) {
+    // The engine deletes the profile of a network whose key ConnMan rejects.
+    n.saved = false;
+    return "wrong_password";
+  }
+  n.saved = true;
+  wifi.connected = n.ssid;
+  return "connected";
+}
+
+function wifiForget(ssid: string, security: number) {
+  const wifi = mockWifi();
+  const n = wifi.networks.find(
+    (x) => x.ssid === ssid && x.security === security && x.saved,
+  );
+  if (!n || !wifi.enabled)
+    throw new Error(
+      "The unit couldn't forget this network. It can only forget a network that's in range.",
+    );
+  n.saved = false;
+  if (wifi.connected === n.ssid) wifi.connected = null;
+}
+
+/** Tests start each case from the seeded Wi-Fi. */
+export function resetMockWifi() {
+  seeded = null;
+}
+
 /** Mirrors `sim_restart`: the restart fallback instead of the HID channel. */
 function restartMode(): boolean {
   return flag("restart") === "1" || flag("fail") === "restart";
@@ -459,6 +610,33 @@ export async function mockInvoke(
       });
       return null;
     }
+    case "wifi_state":
+      wifiReachable();
+      await sleep(300);
+      return wifiState();
+    case "wifi_scan":
+      wifiReachable();
+      await sleep(2500);
+      return wifiNetworks();
+    case "wifi_set_enabled":
+      wifiReachable();
+      await sleep(1200);
+      wifiSetEnabled(args.on as boolean);
+      return null;
+    case "wifi_join": {
+      wifiReachable();
+      if (flag("wifi") === "silent") {
+        await sleep(6000);
+        return "no_response";
+      }
+      await sleep(2500);
+      return wifiJoin(args.join as WifiJoin);
+    }
+    case "wifi_forget":
+      wifiReachable();
+      await sleep(600);
+      wifiForget(args.ssid as string, args.security as number);
+      return null;
     case "settings_get":
       return settings;
     case "settings_set": {
