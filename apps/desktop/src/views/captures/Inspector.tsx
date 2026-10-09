@@ -182,18 +182,25 @@ export function Inspector({
                 <SizePicker
                   sizes={steps.map((s) => ({ label: s.label }))}
                   value={
-                    app.settingsError
+                    app.settingsError || c.options_invalid
                       ? ""
                       : steps[currentStep(steps, options.size)]?.label
                   }
                   disabled={disabled}
                   onChange={setSize}
                 />
-                {app.settingsError && (
+                {app.settingsError ? (
                   <span className="small muted">
                     Current size is unknown because player settings could not be
                     read reliably.
                   </span>
+                ) : (
+                  c.options_invalid && (
+                    <span className="small muted">
+                      Current size is unknown because this capture&apos;s saved
+                      settings are invalid. Choose a size to fix them.
+                    </span>
+                  )
                 )}
                 <span className="small muted3">
                   Larger sizes sound closer to the amp but use more of the

@@ -199,6 +199,10 @@ pub struct UnitModel {
     pub error: Option<String>,
     #[serde(default)]
     pub options: PlayerOptions,
+    /// The unit's player settings for this capture are invalid, so `options` is empty
+    /// and the size it loads is unknown.
+    #[serde(default)]
+    pub options_invalid: bool,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -1178,6 +1182,7 @@ impl SimState {
                     info: present.then_some(info),
                     error: None,
                     options: PlayerOptions::default(),
+                    options_invalid: false,
                 },
             );
         }
@@ -1239,6 +1244,7 @@ impl Unit for SimUnit {
                     info: None,
                     error: None,
                     options: PlayerOptions::default(),
+                    options_invalid: false,
                 });
             }
         });
@@ -1270,6 +1276,7 @@ impl Unit for SimUnit {
                         info,
                         error: None,
                         options: PlayerOptions::default(),
+                        options_invalid: false,
                         name: m.name.clone(),
                     },
                 )
@@ -1614,6 +1621,22 @@ mod tests {
     }
 
     #[test]
+    fn list_marks_captures_with_invalid_options() {
+        let listed: ModelList<UnitModel> = serde_json::from_str(
+            r#"{"models":[
+                {"name":"a.nam","file":"a.nam.wav","bytes":1,"registered":true,"present":true,
+                 "sha256":"a","options":{},"options_invalid":true},
+                {"name":"b.nam","file":"b.nam.wav","bytes":1,"registered":true,"present":true,
+                 "sha256":"b","options":{"size":0}}]}"#,
+        )
+        .unwrap();
+        assert!(listed.settings_error.is_none());
+        assert!(listed.models[0].options_invalid);
+        assert!(!listed.models[1].options_invalid);
+        assert_eq!(listed.models[1].options.size, Some(0.0));
+    }
+
+    #[test]
     fn list_settings_warning_survives_decoding_without_models() {
         let reply =
             parse_last_json(r#"{"models":[],"settings_error":"cannot read settings"}"#).unwrap();
@@ -1732,6 +1755,7 @@ mod tests {
             info: None,
             error: None,
             options: PlayerOptions::default(),
+            options_invalid: false,
         };
         let mut out = AddOutcome {
             added: names(&["a.nam", "b.nam", "c.nam"]),

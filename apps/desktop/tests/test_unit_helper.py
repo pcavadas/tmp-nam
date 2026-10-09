@@ -84,8 +84,7 @@ class PlayerOptionsTests(unittest.TestCase):
                          {"output_gain": 3.0})
 
     def test_list_reports_invalid_settings_without_repairing_them(self):
-        for raw in (b"invalid", b"\xff", b'[]', b'{}', b'{"models":[]}',
-                    b'{"models":{"new-hash":null}}'):
+        for raw in (b"invalid", b"\xff", b'[]', b'{}', b'{"models":[]}'):
             with self.subTest(raw=raw):
                 self.path.write_bytes(raw)
                 self.assertIn("settings_error", self.listed())
@@ -104,7 +103,7 @@ class PlayerOptionsTests(unittest.TestCase):
         self.assertNotIn("settings_error", listed)
         self.assertEqual(listed["models"][0]["options"], {"output_gain": 4.0})
 
-    def test_invalid_listed_numbers_warn_without_hiding_captures_or_writing(self):
+    def test_invalid_listed_numbers_mark_the_capture_without_hiding_it_or_writing(self):
         for key, values in (("size", ["0.5", None, True, [], {}, -1, 2,
                                       float("nan"), float("inf")]),
                             ("output_gain", ["4", None, False, [], {}, -1, 9,
@@ -114,12 +113,37 @@ class PlayerOptionsTests(unittest.TestCase):
                     self.save({"models": {"new-hash": {key: value}}})
                     before = self.path.read_bytes()
                     listed = self.listed()
-                    self.assertIn("settings_error", listed)
+                    self.assertNotIn("settings_error", listed)
                     self.assertEqual(len(listed["models"]), 1)
                     self.assertEqual(listed["models"][0]["options"], {})
+                    self.assertIs(listed["models"][0]["options_invalid"], True)
                     # The reply must be strict JSON, including non-finite inputs.
                     json.dumps(listed, allow_nan=False)
                     self.assertEqual(self.path.read_bytes(), before)
+
+    def test_invalid_entry_marks_only_its_capture(self):
+        self.helper.IR_DIR = str(self.path.parent)
+        self.helper.INDEX = str(self.path.parent / "index.json")
+        for name in ("bad.nam.wav", "good.nam.wav"):
+            (self.path.parent / name).write_bytes(name.encode())
+        for entry in (None, [], "invalid", {"size": "0.5"}, {"output_gain": 9}):
+            with self.subTest(entry=entry):
+                self.save({"models": {"sha-bad": entry, "sha-good": {"size": 0},
+                                      "sha-gone": None}})
+                output = io.StringIO()
+                with mock.patch.object(self.helper, "registered_names", return_value=[]), \
+                        mock.patch.object(self.helper, "sha256_path",
+                                          side_effect=lambda p: "sha-" + Path(p).name[:-8]), \
+                        mock.patch.object(self.helper, "describe", return_value={}), \
+                        contextlib.redirect_stdout(output):
+                    self.helper.cmd_list([])
+                listed = json.loads(output.getvalue())
+                self.assertNotIn("settings_error", listed)
+                rows = {row["name"]: row for row in listed["models"]}
+                self.assertIs(rows["bad.nam"]["options_invalid"], True)
+                self.assertEqual(rows["bad.nam"]["options"], {})
+                self.assertNotIn("options_invalid", rows["good.nam"])
+                self.assertEqual(rows["good.nam"]["options"], {"size": 0})
 
     def test_list_accepts_zero_and_boundary_options(self):
         for size, gain in ((0, 0), (1, 8), (0.5, 4.0)):

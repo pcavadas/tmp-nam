@@ -129,6 +129,7 @@ const capture = (
   sha256: `sha-${name}`,
   info,
   options: {},
+  options_invalid: false,
   ...extra,
 });
 

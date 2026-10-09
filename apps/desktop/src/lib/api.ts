@@ -58,6 +58,8 @@ export interface UnitModel {
   info?: ModelInfo | null;
   error?: string | null;
   options: PlayerOptions;
+  /** This capture's player settings are invalid: `options` is empty, size unknown. */
+  options_invalid: boolean;
 }
 
 export interface UnitInfo {

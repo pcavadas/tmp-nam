@@ -970,6 +970,7 @@ mod tests {
                 info: None,
                 error: None,
                 options: unit::PlayerOptions::default(),
+                options_invalid: false,
             },
             source: Some(installs::Install {
                 tone_id: 7.into(),

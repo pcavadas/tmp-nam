@@ -138,19 +138,27 @@ def registered_names():
                if isinstance(e, dict) and e.get("name"))
 
 
+# The numeric options the desktop understands, with their inclusive maximum.
+OPTION_LIMITS = (("size", 1), ("output_gain", 8))
+
+
+def valid_option(value, maximum):
+    # NaN and infinities fail the range check.
+    return (not isinstance(value, bool) and isinstance(value, (int, float))
+            and 0 <= value <= maximum)
+
+
 def listed_options(entry):
     # Only expose the numeric options the desktop understands. Invalid values
     # must not make the entire list undecodable by the Rust backend.
     if not isinstance(entry, dict):
         raise ValueError("expected a capture settings object")
     options = {}
-    for key, maximum in (("size", 1), ("output_gain", 8)):
+    for key, maximum in OPTION_LIMITS:
         if key in entry:
-            value = entry[key]
-            if (isinstance(value, bool) or not isinstance(value, (int, float))
-                    or not 0 <= value <= maximum):
+            if not valid_option(entry[key], maximum):
                 raise ValueError("invalid " + key)
-            options[key] = value
+            options[key] = entry[key]
     return options
 
 
@@ -163,8 +171,6 @@ def cmd_list(_args):
         if not isinstance(player, dict) or not isinstance(player.get("models"), dict):
             raise ValueError("expected a models object")
         opts = player["models"]
-        if any(not isinstance(entry, dict) for entry in opts.values()):
-            settings_error = "Invalid capture settings in %s." % PLAYER
     except FileNotFoundError:
         opts = {}
         if os.path.lexists(PLAYER):
@@ -212,8 +218,9 @@ def cmd_list(_args):
         try:
             row["options"] = listed_options(sel)
         except ValueError:
+            # Only this capture's entry is unusable; the others still list.
             row["options"] = {}
-            settings_error = "Invalid capture settings in %s." % PLAYER
+            row["options_invalid"] = True
         rows.append(row)
     for name in sorted(names):
         if name.endswith(".nam") and not os.path.isfile(

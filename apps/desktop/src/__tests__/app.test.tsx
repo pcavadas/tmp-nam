@@ -112,6 +112,46 @@ describe("Captures", () => {
     }
   });
 
+  it("leaves the size unknown only for a capture with invalid settings", async () => {
+    const original = await api.unitList();
+    const list = vi.spyOn(api, "unitList").mockResolvedValue({
+      models: original.models.map((m, i) =>
+        i === 0 ? { ...m, options: {}, options_invalid: true } : m,
+      ),
+    });
+    try {
+      render(<App />);
+      await screen.findByRole(
+        "heading",
+        { name: "Fender Deluxe Reverb '65 Vibrato" },
+        wait,
+      );
+      expect(
+        screen.queryByText("Player settings unavailable"),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.getByText(/this capture's saved settings are invalid/),
+      ).toBeInTheDocument();
+      for (const size of screen.getAllByRole("radio"))
+        expect(size).toHaveAttribute("aria-checked", "false");
+      await userEvent.click(
+        screen.getByRole("button", { name: /Marshall JCM800 2203 Crunch/ }),
+      );
+      await screen.findByRole("heading", {
+        name: "Marshall JCM800 2203 Crunch",
+      });
+      expect(
+        screen.queryByText(/Current size is unknown/),
+      ).not.toBeInTheDocument();
+      expect(screen.getByRole("radio", { name: /Lite/ })).toHaveAttribute(
+        "aria-checked",
+        "true",
+      );
+    } finally {
+      list.mockRestore();
+    }
+  });
+
   it("shows settings errors even when no captures are installed", async () => {
     const list = vi.spyOn(api, "unitList").mockResolvedValue({
       models: [],
