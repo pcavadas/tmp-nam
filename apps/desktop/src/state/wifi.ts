@@ -325,11 +325,11 @@ export function useWifi(): WifiStore {
           try {
             s = await api.wifiSetEnabled(on);
             setState(s);
-          } catch {
+          } catch (e) {
             setNotice({
               tone: "error",
               title: on ? "Wi-Fi didn't turn on" : "Wi-Fi didn't turn off",
-              text: "The unit didn't confirm the change. Try again.",
+              text: errorText(e),
               action: { label: "Try Again", kind: "toggle", on },
             });
           }

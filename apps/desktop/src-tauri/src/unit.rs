@@ -444,9 +444,10 @@ pub struct ConsoleUnit {
     /// The engine's HID channel, opened on first use and kept for the connection: on
     /// macOS a closed exclusive device refuses re-opens for tens of seconds.
     hid: Option<HidSession>,
-    /// When and why opening it last failed; a failed exclusive open re-arms that
-    /// lockout, so don't retry before `HID_RETRY`.
-    hid_failed: Option<(Instant, String)>,
+    /// When and why it last failed, and whether opening it failed (another app may
+    /// hold it) rather than an open session being lost. A failed exclusive open
+    /// re-arms that lockout, so don't retry before `HID_RETRY`.
+    hid_failed: Option<(Instant, String, bool)>,
     /// `wifi_files`, read once per connection: neither changes while the unit runs.
     wifi_files: Option<(Option<bool>, bool)>,
 }
@@ -662,7 +663,7 @@ impl ConsoleUnit {
             if self
                 .hid_failed
                 .as_ref()
-                .is_some_and(|(t, _)| t.elapsed() < HID_RETRY)
+                .is_some_and(|(t, _, _)| t.elapsed() < HID_RETRY)
             {
                 return None;
             }
@@ -673,7 +674,7 @@ impl ConsoleUnit {
                 }
                 Err(e) => {
                     log::warn!("HID channel unavailable, using engine restarts: {e}");
-                    self.hid_failed = Some((Instant::now(), e));
+                    self.hid_failed = Some((Instant::now(), e, true));
                     return None;
                 }
             }
@@ -690,8 +691,13 @@ impl ConsoleUnit {
         f: impl Fn(&mut HidSession) -> Result<T, String>,
     ) -> Result<T, String> {
         if self.open_hid().is_none() {
-            let why = self.hid_failed.as_ref().map_or("", |(_, e)| e.as_str());
-            return Err(wifi_no_hid(why));
+            return Err(match &self.hid_failed {
+                Some((_, e, false)) => format!(
+                    "The connection to the unit's control channel dropped ({e}). \
+                     TMP NAM reopens it within a minute; try again then."
+                ),
+                failed => wifi_no_hid(failed.as_ref().map_or("", |(_, e, _)| e.as_str())),
+            });
         }
         let h = self.hid.as_mut().ok_or("HID channel closed")?;
         let error = match f(h) {
@@ -733,7 +739,7 @@ impl ConsoleUnit {
     fn hid_lost(&mut self, error: &str) {
         log::warn!("HID channel lost: {error}");
         self.hid = None;
-        self.hid_failed = Some((Instant::now(), error.to_string()));
+        self.hid_failed = Some((Instant::now(), error.to_string(), false));
     }
 
     fn hid(&mut self) -> Result<&mut HidSession, String> {
