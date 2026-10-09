@@ -6,7 +6,7 @@ import {
   api,
   type AddOutcome,
   type PlayerOptionsPatch,
-  type SshState,
+  type SshView,
 } from "../lib/api";
 import { resetMockWifi } from "../lib/mock";
 import App from "../App";
@@ -912,8 +912,8 @@ describe("Settings › Wi-Fi › SSH access", () => {
   });
 
   it("an SSH change disables Wi-Fi controls and sends", async () => {
-    const enabling = new Promise<SshState>(() => undefined);
-    const enable = vi.spyOn(api, "sshEnable").mockReturnValue(enabling);
+    const enabling = new Promise<SshView>(() => undefined);
+    const enable = vi.spyOn(api, "sshSet").mockReturnValue(enabling);
     try {
       const card = await openSsh();
       await userEvent.click(

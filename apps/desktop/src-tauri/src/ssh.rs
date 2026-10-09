@@ -51,8 +51,6 @@ pub struct SshState {
     #[serde(default)]
     pub mode: SshMode,
     #[serde(default)]
-    pub running: Option<bool>,
-    #[serde(default)]
     pub keys: Vec<AuthorizedKey>,
 }
 
@@ -333,7 +331,7 @@ mod tests {
         let old: SshState = serde_json::from_str(r#"{"supported": false}"#).unwrap();
         assert!(!old.supported && !old.enabled && old.keys.is_empty());
         let on: SshState = serde_json::from_str(
-            r#"{"supported": true, "enabled": true, "mode": "none", "running": true,
+            r#"{"supported": true, "enabled": true, "mode": "none",
                 "keys": [{"type": "ssh-ed25519", "bits": 256, "comment": "a@b",
                           "fingerprint": "SHA256:x"}]}"#,
         )

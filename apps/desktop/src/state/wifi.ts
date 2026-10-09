@@ -7,7 +7,7 @@
 // up to 45 s, on/off up to 30 s. The engine applies the on/off setting at every start,
 // with or without the NAM card.
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import type { Activity, NetworkKind } from "../ds";
 import {
   api,
@@ -19,6 +19,7 @@ import {
   type WifiState,
 } from "../lib/api";
 import { errorText } from "../lib/format";
+import { useActivity } from "./activity";
 
 // ── Rules ────────────────────────────────────────────────────────────────────
 
@@ -241,28 +242,11 @@ const readFailure = (e: unknown) => ({
 export function useWifi(): WifiStore {
   const [state, setState] = useState<WifiState | null>(null);
   const [readError, setReadError] = useState<WifiStore["readError"]>(null);
-  const [activity, setActivity] = useState<WifiActivity | null>(null);
+  const { activity, setActivity, exclusive } = useActivity<WifiActivity>();
   const [scanned, setScanned] = useState(false);
   const [notice, setNotice] = useState<WifiNotice | null>(null);
   const [lastJoin, setLastJoin] = useState<LastJoin | null>(null);
   const [removed, setRemoved] = useState<string[]>([]);
-  const running = useRef(false);
-
-  /** One request at a time: ignored while another one runs. */
-  const exclusive = useCallback(
-    async (what: WifiActivity, f: () => Promise<void>) => {
-      if (running.current) return;
-      running.current = true;
-      setActivity(what);
-      try {
-        await f();
-      } finally {
-        running.current = false;
-        setActivity(null);
-      }
-    },
-    [],
-  );
 
   /** Take a state read; a failed one is shown in place of the page. */
   const take = useCallback(async (read: Promise<WifiState>) => {
@@ -283,7 +267,7 @@ export function useWifi(): WifiStore {
     setState((s) => (s ? { ...s, networks } : s));
     setScanned(true);
     setRemoved([]);
-  }, []);
+  }, [setActivity]);
 
   /** Scan when Wi-Fi is on, after a read that skipped the networks. */
   const scanIfOn = useCallback(

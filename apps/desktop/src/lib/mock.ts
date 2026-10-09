@@ -431,7 +431,6 @@ const mockSsh = (): MockSsh =>
       supported: flag("ssh") !== "old",
       enabled: flag("ssh") === "old",
       mode: flag("ssh") === "old" ? "none" : "key",
-      running: flag("ssh") === "old",
       keys: [],
     },
     thisComputer: null,
@@ -463,7 +462,11 @@ function mockParseKey(text: string): PublicKey {
 const MOCK_MAC_KEY =
   "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMockThisComputerKeyForTheBrowserOnly me@This-Mac";
 
-async function sshRequest<T>(ms: number, f: (s: MockSsh) => T): Promise<T> {
+/** Runs `f` on the card, answering like `ssh_set`/`ssh_add_key`/`ssh_remove_key`. */
+async function sshRequest(
+  ms: number,
+  f: (s: MockSsh) => void,
+): Promise<{ ssh: SshState; this_computer: PublicKey | null }> {
   await sleep(ms);
   if (flag("ssh") === "silent") {
     await sleep(3000);
@@ -471,7 +474,14 @@ async function sshRequest<T>(ms: number, f: (s: MockSsh) => T): Promise<T> {
   }
   const s = mockSsh();
   if (!s.state.supported) throw new ApiError("card_too_old", "card_too_old");
-  return f(s);
+  f(s);
+  return { ssh: s.state, this_computer: s.thisComputer };
+}
+
+/** This computer's key, "created" when missing. */
+function mockThisComputer(s: MockSsh): string {
+  s.thisComputer ??= mockParseKey(MOCK_MAC_KEY);
+  return MOCK_MAC_KEY;
 }
 
 function mockAllow(s: MockSsh, line: string): boolean {
@@ -480,13 +490,6 @@ function mockAllow(s: MockSsh, line: string): boolean {
   s.lines.set(key.fingerprint, line);
   s.state.keys = [...s.state.keys, key];
   return true;
-}
-
-function mockSshSet(s: MockSsh, enabled: boolean, mode: SshMode): SshState {
-  if (enabled && mode === "key" && s.state.keys.length === 0)
-    throw new ApiError("no_keys", "no_keys");
-  s.state = { ...s.state, enabled, mode, running: enabled };
-  return s.state;
 }
 
 /** Tests start each case from the seeded Wi-Fi and SSH. */
@@ -772,33 +775,22 @@ export async function mockInvoke(
       s.thisComputer ??= mockParseKey(MOCK_MAC_KEY);
       return s.thisComputer;
     }
-    case "ssh_enable":
-      return sshRequest(1800, (s) => {
-        s.thisComputer ??= mockParseKey(MOCK_MAC_KEY);
-        mockAllow(s, MOCK_MAC_KEY);
-        return mockSshSet(s, true, "key");
-      });
-    case "ssh_disable":
-      return sshRequest(1200, (s) => mockSshSet(s, false, s.state.mode));
-    case "ssh_set_mode":
-      return sshRequest(1000, (s) => {
-        if (args.mode === "key") mockAllow(s, MOCK_MAC_KEY);
-        return mockSshSet(s, true, args.mode as SshMode);
+    case "ssh_set":
+      return sshRequest(1200, (s) => {
+        const enabled = args.enabled as boolean;
+        const mode = (args.mode as SshMode | null) ?? s.state.mode;
+        if (enabled && mode === "key") mockAllow(s, mockThisComputer(s));
+        if (enabled && mode === "key" && s.state.keys.length === 0)
+          throw new ApiError("no_keys", "no_keys");
+        s.state = { ...s.state, enabled, mode };
       });
     case "ssh_check_key":
       return mockParseKey(args.text as string);
     case "ssh_add_key":
       return sshRequest(1000, (s) => {
-        if (!mockAllow(s, args.text as string))
+        const text = args.text as string | null;
+        if (!mockAllow(s, text ?? mockThisComputer(s)))
           throw new ApiError("duplicate", "duplicate");
-        return s.state;
-      });
-    case "ssh_add_this_computer":
-      return sshRequest(1000, (s) => {
-        s.thisComputer ??= mockParseKey(MOCK_MAC_KEY);
-        if (!mockAllow(s, MOCK_MAC_KEY))
-          throw new ApiError("duplicate", "duplicate");
-        return s.state;
       });
     case "ssh_remove_key":
       return sshRequest(1000, (s) => {
@@ -807,8 +799,7 @@ export async function mockInvoke(
           throw new ApiError("unknown_key", "unknown_key");
         s.state.keys = s.state.keys.filter((k) => k.fingerprint !== fp);
         if (s.state.keys.length === 0 && s.state.mode === "key")
-          s.state = { ...s.state, enabled: false, running: false };
-        return s.state;
+          s.state = { ...s.state, enabled: false };
       });
     case "t3k_open_link_again":
     case "t3k_open_site":

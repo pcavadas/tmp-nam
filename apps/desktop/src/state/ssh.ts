@@ -5,7 +5,7 @@
 // only (allowed computers, never passwords) or no security (root, no password). The
 // app reads and changes it over the USB console, one request at a time.
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import {
   api,
   ApiError,
@@ -13,8 +13,10 @@ import {
   type PublicKey,
   type SshMode,
   type SshState,
+  type SshView,
 } from "../lib/api";
 import { errorText } from "../lib/format";
+import { useActivity } from "./activity";
 
 // ── Rules ────────────────────────────────────────────────────────────────────
 
@@ -74,12 +76,7 @@ export type SshActivity =
   | { kind: "removing"; name: string };
 
 export type SshNoticeAction =
-  | "enable"
-  | "disable"
-  | "add-this-computer"
-  | "set-mode"
-  | "remove"
-  | "open-sd";
+  "enable" | "disable" | "add-this-computer" | "set-mode" | "remove";
 
 export interface SshNotice {
   tone: "ok" | "error";
@@ -125,38 +122,26 @@ export function useSsh(): SshStore {
   const [state, setState] = useState<SshState | null>(null);
   const [thisComputer, setThisComputer] = useState<PublicKey | null>(null);
   const [readError, setReadError] = useState<string | null>(null);
-  const [activity, setActivity] = useState<SshActivity | null>(null);
+  const { activity, setActivity, exclusive } = useActivity<SshActivity>();
   const [notice, setNotice] = useState<SshNotice | null>(null);
-  const running = useRef(false);
 
-  /** One request at a time: ignored while another one runs. */
-  const exclusive = useCallback(
-    async (what: SshActivity, f: () => Promise<void>) => {
-      if (running.current) return;
-      running.current = true;
-      setActivity(what);
-      try {
-        await f();
-      } finally {
-        running.current = false;
-        setActivity(null);
-      }
-    },
-    [],
-  );
+  /** Take what the unit answered; the new state. */
+  const take = useCallback((v: SshView) => {
+    setState(v.ssh);
+    setThisComputer(v.this_computer);
+    return v.ssh;
+  }, []);
 
   const load = useCallback(async () => {
     await exclusive({ kind: "reading" }, async () => {
       try {
-        const v = await api.sshState();
-        setState(v.ssh);
-        setThisComputer(v.this_computer);
+        take(await api.sshState());
         setReadError(null);
       } catch (e) {
         setReadError(errorText(e));
       }
     });
-  }, [exclusive]);
+  }, [exclusive, take]);
 
   const enable = useCallback(async () => {
     await exclusive({ kind: "turning-on", step: "adding" }, async () => {
@@ -167,7 +152,7 @@ export function useSsh(): SshStore {
           setThisComputer(await api.sshCreateKey());
           setActivity({ kind: "turning-on", step: "adding" });
         }
-        setState(await api.sshEnable());
+        take(await api.sshSet(true, "key"));
       } catch (e) {
         const keyFailed = e instanceof ApiError && e.code === "key_failed";
         setNotice({
@@ -180,13 +165,13 @@ export function useSsh(): SshStore {
         });
       }
     });
-  }, [exclusive, thisComputer]);
+  }, [exclusive, setActivity, take, thisComputer]);
 
   const disable = useCallback(async () => {
     await exclusive({ kind: "turning-off" }, async () => {
       setNotice(null);
       try {
-        setState(await api.sshDisable());
+        take(await api.sshSet(false, null));
       } catch {
         setNotice({
           tone: "error",
@@ -196,16 +181,14 @@ export function useSsh(): SshStore {
         });
       }
     });
-  }, [exclusive]);
+  }, [exclusive, take]);
 
   const setMode = useCallback(
     async (mode: SshMode) => {
       await exclusive({ kind: "mode", to: mode }, async () => {
         setNotice(null);
         try {
-          if (mode === "key" && !thisComputer)
-            setThisComputer(await api.sshCreateKey());
-          setState(await api.sshSetMode(mode));
+          take(await api.sshSet(true, mode));
         } catch {
           setNotice({
             tone: "error",
@@ -219,7 +202,7 @@ export function useSsh(): SshStore {
         }
       });
     },
-    [exclusive, thisComputer],
+    [exclusive, take],
   );
 
   const addThisComputer = useCallback(async () => {
@@ -227,8 +210,7 @@ export function useSsh(): SshStore {
     await exclusive({ kind: "adding", name }, async () => {
       setNotice(null);
       try {
-        if (!thisComputer) setThisComputer(await api.sshCreateKey());
-        setState(await api.sshAddThisComputer());
+        take(await api.sshAddKey(null));
       } catch {
         setNotice({
           tone: "error",
@@ -238,7 +220,7 @@ export function useSsh(): SshStore {
         });
       }
     });
-  }, [exclusive, thisComputer]);
+  }, [exclusive, take, thisComputer]);
 
   const addKey = useCallback(
     async (text: string, name: string): Promise<AddResult> => {
@@ -246,7 +228,7 @@ export function useSsh(): SshStore {
       await exclusive({ kind: "adding", name }, async () => {
         setNotice(null);
         try {
-          setState(await api.sshAddKey(text));
+          take(await api.sshAddKey(text));
           setNotice({
             tone: "ok",
             title: `${name} can log in`,
@@ -270,7 +252,7 @@ export function useSsh(): SshStore {
       });
       return result;
     },
-    [exclusive],
+    [exclusive, take],
   );
 
   const removeKey = useCallback(
@@ -279,8 +261,7 @@ export function useSsh(): SshStore {
       await exclusive({ kind: "removing", name }, async () => {
         setNotice(null);
         try {
-          const s = await api.sshRemoveKey(k.fingerprint);
-          setState(s);
+          const s = take(await api.sshRemoveKey(k.fingerprint));
           setNotice(
             s.keys.length === 0 && s.mode === "key"
               ? {
@@ -304,7 +285,7 @@ export function useSsh(): SshStore {
         }
       });
     },
-    [exclusive],
+    [exclusive, take],
   );
 
   const reset = useCallback(() => {
@@ -337,17 +318,5 @@ export function useSsh(): SshStore {
 export function sshExposure(s: SshState | null): "old" | "none" | null {
   if (s && !s.supported) return "old";
   if (s?.enabled && s.mode === "none") return "none";
-  return null;
-}
-
-/** Why SSH controls are disabled, or null. */
-export function sshBlockedReason(
-  transfer: boolean,
-  wifiBusy: boolean,
-  own: SshActivity | null,
-): string | null {
-  if (transfer) return "Available when the transfer finishes";
-  if (wifiBusy) return "Available when the Wi-Fi change finishes";
-  if (own) return "Available when the SSH change finishes";
   return null;
 }

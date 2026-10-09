@@ -7,7 +7,6 @@ import {
   keyTypeLabel,
   orderedKeys,
   shortFingerprint,
-  sshBlockedReason,
   sshExposure,
 } from "../state/ssh";
 
@@ -22,7 +21,6 @@ const state = (extra: Partial<SshState> = {}): SshState => ({
   supported: true,
   enabled: false,
   mode: "key",
-  running: false,
   keys: [],
   ...extra,
 });
@@ -72,18 +70,5 @@ describe("SSH access rules", () => {
     expect(sshExposure(state({ enabled: true, mode: "none" }))).toBe("none");
     expect(sshExposure(state({ enabled: false, mode: "none" }))).toBeNull();
     expect(sshExposure(state({ supported: false }))).toBe("old");
-  });
-
-  it("gives the reason SSH controls are disabled", () => {
-    expect(sshBlockedReason(true, true, { kind: "turning-off" })).toBe(
-      "Available when the transfer finishes",
-    );
-    expect(sshBlockedReason(false, true, null)).toBe(
-      "Available when the Wi-Fi change finishes",
-    );
-    expect(sshBlockedReason(false, false, { kind: "turning-off" })).toBe(
-      "Available when the SSH change finishes",
-    );
-    expect(sshBlockedReason(false, false, null)).toBeNull();
   });
 });

@@ -21,7 +21,7 @@ import {
   type PublicKey,
   type SshState,
 } from "../../lib/api";
-import { copyText, defer } from "../../lib/format";
+import { defer } from "../../lib/format";
 import { useApp } from "../../state/context";
 import {
   isPrivateKey,
@@ -30,31 +30,12 @@ import {
   keyTypeLabel,
   orderedKeys,
   shortFingerprint,
-  sshBlockedReason,
   type SshStore,
 } from "../../state/ssh";
+import { CopyButton } from "./CopyButton";
 
 const LOGIN = "ssh root@fmic-tm-pro.local";
 const HELP = "Lets this Mac log in to the NAM card over Wi-Fi.";
-
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <>
-      <Button
-        size="sm"
-        onClick={() =>
-          void copyText(text).then((err) => {
-            setCopied(err === null);
-          })
-        }
-      >
-        Copy
-      </Button>
-      {copied && <span className="small muted3">Copied</span>}
-    </>
-  );
-}
 
 /** SSH results and errors, in the page's banner slot. */
 export function SshNoticeBanner() {
@@ -62,11 +43,7 @@ export function SshNoticeBanner() {
   const { ssh } = app;
   const n = ssh.notice;
   if (!n) return null;
-  const blocked = sshBlockedReason(
-    app.op !== null,
-    app.wifi.activity !== null,
-    ssh.activity,
-  );
+  const blocked = app.unitBusyReason;
   const act = () => {
     const a = n.action;
     switch (a?.kind) {
@@ -80,8 +57,6 @@ export function SshNoticeBanner() {
         return void (a.mode && ssh.setMode(a.mode));
       case "remove":
         return void (a.key && ssh.removeKey(a.key));
-      case "open-sd":
-        app.navigate("sdcard");
     }
   };
   return (
@@ -111,119 +86,102 @@ export function SshNoticeBanner() {
 /** The SSH access card, directly under the Wi-Fi status card. */
 export function SshAccess() {
   const app = useApp();
-  const { ssh, wifi } = app;
+  const { ssh } = app;
   const transfer = app.op !== null;
-  const { load } = ssh;
+  const { load, state } = ssh;
   const [confirmNone, setConfirmNone] = useState(false);
   const [removing, setRemoving] = useState<AuthorizedKey | null>(null);
   const [adding, setAdding] = useState(false);
 
+  // Read once per connection: every change answers with the new state.
+  const unread = state === null;
   useEffect(() => {
-    if (app.connected && !transfer) defer(load);
-  }, [app.connected, transfer, load]);
+    if (app.connected && !transfer && unread) defer(load);
+  }, [app.connected, transfer, unread, load]);
 
-  const head = (control?: ReactNode) => (
-    <div className="wifi-row">
-      <div className="wifi-col" style={{ flex: 1, minWidth: 0 }}>
-        <span className="wifi-title">SSH access</span>
-        <span className="small muted3" id="ssh-switch-help">
-          {HELP}
-        </span>
+  const card = (control: ReactNode, body: ReactNode) => (
+    <section
+      className="tn-card"
+      style={{ marginTop: 16 }}
+      aria-label="SSH access"
+    >
+      <div className="wifi-row">
+        <div className="wifi-col" style={{ flex: 1, minWidth: 0 }}>
+          <span className="wifi-title">SSH access</span>
+          <span className="small muted3" id="ssh-switch-help">
+            {HELP}
+          </span>
+        </div>
+        {control}
       </div>
-      {control}
-    </div>
+      {body}
+    </section>
   );
 
   if (!app.connected)
-    return (
-      <section
-        className="tn-card"
-        style={{ marginTop: 16 }}
-        aria-label="SSH access"
-      >
-        {head()}
-        <div className="wifi-row">
-          <span className="small muted">Shown when the unit is connected.</span>
-        </div>
-      </section>
+    return card(
+      null,
+      <div className="wifi-row">
+        <span className="small muted">Shown when the unit is connected.</span>
+      </div>,
     );
 
-  const { state } = ssh;
   if (!state)
-    return (
-      <section
-        className="tn-card"
-        style={{ marginTop: 16 }}
-        aria-label="SSH access"
-      >
-        {head()}
-        <div className="wifi-row">
-          {ssh.readError ? (
-            <Banner
-              tone="error"
-              title="Couldn't read SSH access"
-              style={{ flex: 1 }}
-              actions={[{ label: "Try Again", onClick: () => void load() }]}
-            >
-              {ssh.readError}
-            </Banner>
-          ) : (
-            <span className="hrow small muted">
-              <Spinner label="Reading SSH access" />
-              Reading SSH access…
-            </span>
-          )}
-        </div>
-      </section>
-    );
-
-  const blocked = sshBlockedReason(
-    transfer,
-    wifi.activity !== null,
-    ssh.activity,
-  );
-
-  if (!state.supported)
-    return (
-      <section
-        className="tn-card"
-        style={{ marginTop: 16 }}
-        aria-label="SSH access"
-      >
-        {head(
-          <Switch
-            aria-label="SSH access"
-            aria-describedby="ssh-switch-help"
-            checked
-            disabled
-            title="This card is too old for SSH access settings"
-          />,
-        )}
-        <div className="wifi-row wifi-col">
-          <StatusDot
-            tone="danger"
-            label="Open to anyone on the network, no password"
-          />
+    return card(
+      null,
+      <div className="wifi-row">
+        {ssh.readError ? (
           <Banner
             tone="error"
-            title="This card's SSH accepts a blank password"
-            actions={[
-              {
-                label: "Open SD Card",
-                onClick: () => {
-                  app.navigate("sdcard");
-                },
-              },
-            ]}
+            title="Couldn't read SSH access"
+            style={{ flex: 1 }}
+            actions={[{ label: "Try Again", onClick: () => void load() }]}
           >
-            The NAM card in this unit was made before SSH access could be
-            switched off. Anyone on the same network can log in as root with no
-            password, and this switch can&apos;t change that. Create a new card
-            in SD Card to fix it. Until then, keep Wi-Fi off when you don&apos;t
-            need it.
+            {ssh.readError}
           </Banner>
-        </div>
-      </section>
+        ) : (
+          <span className="hrow small muted">
+            <Spinner label="Reading SSH access" />
+            Reading SSH access…
+          </span>
+        )}
+      </div>,
+    );
+
+  const blocked = app.unitBusyReason;
+
+  if (!state.supported)
+    return card(
+      <Switch
+        aria-label="SSH access"
+        aria-describedby="ssh-switch-help"
+        checked
+        disabled
+        title="This card is too old for SSH access settings"
+      />,
+      <div className="wifi-row wifi-col">
+        <StatusDot
+          tone="danger"
+          label="Open to anyone on the network, no password"
+        />
+        <Banner
+          tone="error"
+          title="This card's SSH accepts a blank password"
+          actions={[
+            {
+              label: "Open SD Card",
+              onClick: () => {
+                app.navigate("sdcard");
+              },
+            },
+          ]}
+        >
+          The NAM card in this unit was made before SSH access could be switched
+          off. Anyone on the same network can log in as root with no password,
+          and this switch can&apos;t change that. Create a new card in SD Card
+          to fix it. Until then, keep Wi-Fi off when you don&apos;t need it.
+        </Banner>
+      </div>,
     );
 
   const a = ssh.activity;
@@ -231,23 +189,17 @@ export function SshAccess() {
   const turningOff = a?.kind === "turning-off";
   const on = turningOn ? true : turningOff ? false : state.enabled;
 
-  return (
-    <section
-      className="tn-card"
-      style={{ marginTop: 16 }}
+  return card(
+    <Switch
       aria-label="SSH access"
-    >
-      {head(
-        <Switch
-          aria-label="SSH access"
-          aria-describedby="ssh-switch-help"
-          checked={on}
-          busy={turningOn !== null || turningOff}
-          disabled={blocked !== null}
-          title={blocked ?? undefined}
-          onChange={(v) => void (v ? ssh.enable() : ssh.disable())}
-        />,
-      )}
+      aria-describedby="ssh-switch-help"
+      checked={on}
+      busy={turningOn !== null || turningOff}
+      disabled={blocked !== null}
+      title={blocked ?? undefined}
+      onChange={(v) => void (v ? ssh.enable() : ssh.disable())}
+    />,
+    <>
       <div className="wifi-row wifi-col" aria-live="polite">
         <StatusLine ssh={ssh} state={state} />
       </div>
@@ -337,7 +289,7 @@ export function SshAccess() {
           }}
         />
       )}
-    </section>
+    </>,
   );
 }
 

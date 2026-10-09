@@ -456,7 +456,7 @@ class SshAccessTests(unittest.TestCase):
     def test_off_by_default_and_card_too_old(self):
         self.assertEqual(self.run_cmd("ssh-state", []),
                          {"supported": True, "enabled": False, "mode": "key",
-                          "running": False, "keys": []})
+                          "keys": []})
         os.remove(self.helper.SSH_LAUNCHER)
         self.assertEqual(self.run_cmd("ssh-state", []), {"supported": False})
         with self.assertRaises(SystemExit) as e:
@@ -465,7 +465,7 @@ class SshAccessTests(unittest.TestCase):
 
     def test_enable_installs_the_key_privately_and_starts(self):
         state = self.run_cmd("ssh-set", ["1", "key", self.key_file(KEYS["ed25519"][0])])
-        self.assertEqual((state["enabled"], state["mode"], state["running"]),
+        self.assertEqual((state["enabled"], state["mode"], self.running),
                          (True, "key", True))
         self.assertEqual([k["fingerprint"] for k in state["keys"]], [KEYS["ed25519"][2]])
         self.assertNotIn("line", state["keys"][0])
@@ -485,8 +485,10 @@ class SshAccessTests(unittest.TestCase):
     def test_no_security_and_off(self):
         state = self.run_cmd("ssh-set", ["1", "none"])
         self.assertEqual((state["enabled"], state["mode"]), (True, "none"))
-        state = self.run_cmd("ssh-set", ["0", "none"])
-        self.assertEqual((state["enabled"], state["running"]), (False, False))
+        # Off keeps the stored mode.
+        state = self.run_cmd("ssh-set", ["0", "keep"])
+        self.assertEqual((state["enabled"], state["mode"], self.running),
+                         (False, "none", False))
 
     def test_add_rejects_duplicates_several_lines_and_private_keys(self):
         self.run_cmd("ssh-add", [self.key_file(KEYS["rsa"][0])])
@@ -508,7 +510,7 @@ class SshAccessTests(unittest.TestCase):
         state = self.run_cmd("ssh-remove", [KEYS["ed25519"][2]])
         self.assertTrue(state["enabled"])
         state = self.run_cmd("ssh-remove", [KEYS["ecdsa384"][2]])
-        self.assertEqual((state["enabled"], state["running"], state["keys"]),
+        self.assertEqual((state["enabled"], self.running, state["keys"]),
                          (False, False, []))
         with self.assertRaises(SystemExit) as e:
             self.run_cmd("ssh-remove", [KEYS["ecdsa384"][2]])

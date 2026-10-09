@@ -319,12 +319,12 @@ pub trait Unit: Send {
     fn wifi_forget(&mut self, ssid: &str, security: u32) -> Result<ForgetOutcome, String>;
     /// SSH access as the card reports it (`supported: false` on cards too old).
     fn ssh_state(&mut self) -> Result<SshState, String>;
-    /// Store and apply on/off and the mode, first allowing `key` (a public-key line)
-    /// if given. Key only needs at least one allowed key.
+    /// Store and apply on/off and the mode (`None` keeps the stored one), first
+    /// allowing `key` (a public-key line) if given. Key only needs an allowed key.
     fn ssh_set(
         &mut self,
         enabled: bool,
-        mode: SshMode,
+        mode: Option<SshMode>,
         key: Option<&str>,
     ) -> Result<SshState, String>;
     fn ssh_add(&mut self, key: &str) -> Result<SshState, String>;
@@ -1072,12 +1072,12 @@ impl Unit for ConsoleUnit {
     fn ssh_set(
         &mut self,
         enabled: bool,
-        mode: SshMode,
+        mode: Option<SshMode>,
         key: Option<&str>,
     ) -> Result<SshState, String> {
         let mut args = vec![
             if enabled { "1" } else { "0" }.to_string(),
-            mode.arg().into(),
+            mode.map_or("keep", SshMode::arg).into(),
         ];
         if let Some(line) = key {
             self.console
@@ -1142,7 +1142,6 @@ impl SimSsh {
                 } else {
                     SshMode::None
                 },
-                running: Some(!supported),
                 keys: vec![],
             },
         }
@@ -1175,15 +1174,21 @@ impl SimSsh {
         Ok(true)
     }
 
-    fn set(&mut self, enabled: bool, mode: SshMode, key: Option<&str>) -> Result<SshState, String> {
+    fn set(
+        &mut self,
+        enabled: bool,
+        mode: Option<SshMode>,
+        key: Option<&str>,
+    ) -> Result<SshState, String> {
         self.require_card()?;
+        let mode = mode.unwrap_or(self.state.mode);
         if let Some(line) = key {
             self.add(line)?;
         }
         if enabled && mode == SshMode::Key && self.state.keys.is_empty() {
             return Err("no_keys".into());
         }
-        (self.state.enabled, self.state.mode, self.state.running) = (enabled, mode, Some(enabled));
+        (self.state.enabled, self.state.mode) = (enabled, mode);
         Ok(self.state.clone())
     }
 
@@ -1195,7 +1200,7 @@ impl SimSsh {
             return Err("unknown_key".into());
         }
         if self.state.keys.is_empty() && self.state.mode == SshMode::Key {
-            (self.state.enabled, self.state.running) = (false, Some(false));
+            self.state.enabled = false;
         }
         Ok(self.state.clone())
     }
@@ -1556,7 +1561,7 @@ impl Unit for SimUnit {
     fn ssh_set(
         &mut self,
         enabled: bool,
-        mode: SshMode,
+        mode: Option<SshMode>,
         key: Option<&str>,
     ) -> Result<SshState, String> {
         std::thread::sleep(Duration::from_millis(1200));
@@ -1785,35 +1790,37 @@ mod tests {
                 supported: true,
                 enabled: false,
                 mode: SshMode::Key,
-                running: Some(false),
                 keys: vec![],
             },
         };
         // Key only needs a key; enabling with one stores it once.
-        assert_eq!(ssh.set(true, SshMode::Key, None), Err("no_keys".into()));
-        let on = ssh.set(true, SshMode::Key, Some(ED25519)).unwrap();
+        assert_eq!(
+            ssh.set(true, Some(SshMode::Key), None),
+            Err("no_keys".into())
+        );
+        let on = ssh.set(true, Some(SshMode::Key), Some(ED25519)).unwrap();
         assert!(on.enabled && on.keys.len() == 1);
         assert_eq!(
-            ssh.set(true, SshMode::Key, Some(ED25519))
+            ssh.set(true, Some(SshMode::Key), Some(ED25519))
                 .unwrap()
                 .keys
                 .len(),
             1
         );
         // No security keeps the list; removing the last key there doesn't turn off.
-        let open = ssh.set(true, SshMode::None, None).unwrap();
+        let open = ssh.set(true, Some(SshMode::None), None).unwrap();
         assert_eq!((open.mode, open.keys.len()), (SshMode::None, 1));
+        // Off keeps the stored mode.
+        let off = ssh.set(false, None, None).unwrap();
+        assert_eq!((off.enabled, off.mode), (false, SshMode::None));
         // In Key only, removing the last key turns SSH off.
-        ssh.set(true, SshMode::Key, None).unwrap();
+        ssh.set(true, Some(SshMode::Key), None).unwrap();
         let off = ssh.remove(ED25519_FP).unwrap();
         assert!(!off.enabled && off.keys.is_empty());
         assert_eq!(ssh.remove(ED25519_FP), Err("unknown_key".into()));
         // A card too old refuses every change.
         ssh.state.supported = false;
-        assert_eq!(
-            ssh.set(false, SshMode::Key, None),
-            Err("card_too_old".into())
-        );
+        assert_eq!(ssh.set(false, None, None), Err("card_too_old".into()));
     }
 
     #[test]

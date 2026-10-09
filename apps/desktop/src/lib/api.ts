@@ -285,7 +285,6 @@ export interface SshState {
   supported: boolean;
   enabled: boolean;
   mode: SshMode;
-  running: boolean | null;
   keys: AuthorizedKey[];
 }
 
@@ -384,18 +383,17 @@ export const api = {
   sshState: () => call<SshView>("ssh_state"),
   /** This computer's public key, created when missing (first step of turning on). */
   sshCreateKey: () => call<PublicKey>("ssh_create_key"),
-  /** On in Key only, allowing this computer. */
-  sshEnable: () => call<SshState>("ssh_enable"),
-  sshDisable: () => call<SshState>("ssh_disable"),
-  /** Key only also allows this computer if the list doesn't have it. */
-  sshSetMode: (mode: SshMode) => call<SshState>("ssh_set_mode", { mode }),
+  /** On or off, and the mode (null keeps the stored one). Turning on in Key only
+   * also allows this computer. */
+  sshSet: (enabled: boolean, mode: SshMode | null) =>
+    call<SshView>("ssh_set", { enabled, mode }),
   /** Check one pasted public key; never pass text that looks like a private key. */
   sshCheckKey: (text: string) => call<PublicKey>("ssh_check_key", { text }),
-  sshAddKey: (text: string) => call<SshState>("ssh_add_key", { text }),
-  sshAddThisComputer: () => call<SshState>("ssh_add_this_computer"),
+  /** Allow a pasted key, or this computer's with null. */
+  sshAddKey: (text: string | null) => call<SshView>("ssh_add_key", { text }),
   /** Removing the last key in Key only turns SSH off. */
   sshRemoveKey: (fingerprint: string) =>
-    call<SshState>("ssh_remove_key", { fingerprint }),
+    call<SshView>("ssh_remove_key", { fingerprint }),
 
   settingsGet: () => call<Settings>("settings_get"),
   settingsSet: (settings: Settings) => call<null>("settings_set", { settings }),

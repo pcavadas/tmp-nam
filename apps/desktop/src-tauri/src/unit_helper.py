@@ -38,14 +38,19 @@ def read_json(path, default):
         return default
 
 
-def write_json(path, data, indent=None):
+def write_atomic(path, text, mode=0o644):
     tmp = path + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(data, f, indent=indent)
-        f.write("\n")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
         f.flush()
         os.fsync(f.fileno())
+    os.chmod(tmp, mode)
     os.rename(tmp, path)
+
+
+def write_json(path, data, indent=None):
+    write_atomic(path, json.dumps(data, indent=indent) + "\n")
 
 
 def sha256_path(path):
@@ -480,14 +485,7 @@ def write_private(path, text):
     if not os.path.isdir(SSH_DIR):
         os.makedirs(SSH_DIR)
     os.chmod(SSH_DIR, 0o700)
-    tmp = path + ".tmp"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        f.write(text)
-        f.flush()
-        os.fsync(f.fileno())
-    os.chmod(tmp, 0o600)
-    os.rename(tmp, path)
+    write_atomic(path, text, 0o600)
 
 
 def write_keys(keys):
@@ -520,24 +518,21 @@ def ssh_running():
     return out.read().strip() == "active"
 
 
-def ssh_apply():
+def ssh_apply(enabled):
     # The launcher exits at once when SSH is off, so restart covers both.
-    os.system("sync; systemctl restart %s >/dev/null 2>&1" % SSH_SERVICE)
+    os.sync()
+    os.system("systemctl restart %s >/dev/null 2>&1" % SSH_SERVICE)
     for _ in range(20):
-        if ssh_running() == read_ssh_state()["enabled"]:
+        if ssh_running() == enabled:
             return
         time.sleep(0.25)
 
 
-def ssh_report():
-    if not os.path.exists(SSH_LAUNCHER):
-        emit({"supported": False})
-        return
-    state = read_ssh_state()
-    keys = [dict((k, v) for k, v in key.items() if k != "line")
-            for key in read_keys()]
+def ssh_report(state, keys):
     emit({"supported": True, "enabled": state["enabled"],
-          "mode": state["mode"], "running": ssh_running(), "keys": keys})
+          "mode": state["mode"],
+          "keys": [dict((k, v) for k, v in key.items() if k != "line")
+                   for key in keys]})
 
 
 def ssh_require_card():
@@ -558,13 +553,18 @@ def ssh_add(path, keys):
 
 
 def cmd_ssh_state(_args):
-    ssh_report()
+    if not os.path.exists(SSH_LAUNCHER):
+        emit({"supported": False})
+        return
+    ssh_report(read_ssh_state(), read_keys())
 
 
 def cmd_ssh_set(args):
-    """ssh-set <0|1> <key|none> [keyfile]: store, add the key, apply."""
+    """ssh-set <0|1> <key|none|keep> [keyfile]: store, add the key, apply."""
     ssh_require_card()
     enabled, mode = args[0] == "1", args[1]
+    if mode == "keep":
+        mode = read_ssh_state()["mode"]
     if mode not in ("key", "none"):
         raise SystemExit("invalid_mode")
     keys = read_keys()
@@ -574,9 +574,10 @@ def cmd_ssh_set(args):
             write_keys(keys)
     if enabled and mode == "key" and not keys:
         raise SystemExit("no_keys")
-    write_ssh_state({"enabled": enabled, "mode": mode})
-    ssh_apply()
-    ssh_report()
+    state = {"enabled": enabled, "mode": mode}
+    write_ssh_state(state)
+    ssh_apply(enabled)
+    ssh_report(state, keys)
 
 
 def cmd_ssh_add(args):
@@ -586,8 +587,8 @@ def cmd_ssh_add(args):
     if not added:
         raise SystemExit("duplicate")
     write_keys(keys)
-    os.system("sync")
-    ssh_report()
+    os.sync()
+    ssh_report(read_ssh_state(), keys)
 
 
 def cmd_ssh_remove(args):
@@ -603,10 +604,10 @@ def cmd_ssh_remove(args):
     if not left and state["mode"] == "key" and state["enabled"]:
         state["enabled"] = False
         write_ssh_state(state)
-        ssh_apply()
+        ssh_apply(False)
     else:
-        os.system("sync")
-    ssh_report()
+        os.sync()
+    ssh_report(state, left)
 
 
 COMMANDS = {

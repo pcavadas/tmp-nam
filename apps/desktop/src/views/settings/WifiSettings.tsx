@@ -23,9 +23,10 @@ import {
   type WifiNetwork,
   type WifiState,
 } from "../../lib/api";
-import { copyText, defer } from "../../lib/format";
+import { defer } from "../../lib/format";
 import { useApp } from "../../state/context";
 import { sshExposure } from "../../state/ssh";
+import { CopyButton } from "./CopyButton";
 import { SshAccess, SshNoticeBanner } from "./SshAccess";
 import {
   caption,
@@ -49,20 +50,15 @@ type SheetState =
 
 const TRANSFER = "Available when the transfer finishes";
 
-/** Why Wi-Fi controls are disabled, or null. */
+/** Why Wi-Fi controls are disabled, or null: the running Wi-Fi request, else
+ * whatever else holds the unit (`unitBusyReason`). */
 function blockedReason(
   a: WifiActivity | null,
-  transfer: boolean,
-  working: boolean,
-  sshBusy: boolean,
+  unitBusy: string | null,
 ): string | null {
-  if (transfer) return TRANSFER;
-  // A remove or a size/gain change holds the unit too.
-  if (working) return "Available when the unit is ready";
-  if (sshBusy) return "Available when the SSH change finishes";
   switch (a?.kind) {
     case undefined:
-      return null;
+      return unitBusy;
     case "joining":
       return "Available when joining finishes";
     case "switching":
@@ -172,12 +168,7 @@ export function WifiSettings() {
   }
 
   const exposure = sshExposure(app.ssh.state);
-  const blocked = blockedReason(
-    wifi.activity,
-    transfer,
-    app.working,
-    app.ssh.activity !== null,
-  );
+  const blocked = blockedReason(wifi.activity, app.unitBusyReason);
   const showList =
     state.status.enabled &&
     !noRadio(state) &&
@@ -331,7 +322,6 @@ function StatusCard({
   const radioMissing = noRadio(state);
   const switching = a?.kind === "switching" ? a : null;
   const joining = a?.kind === "joining" ? a : null;
-  const [copied, setCopied] = useState(false);
   const connectedRow = state.networks.find((n) => n.connected);
   const name = status.ssid || "a hidden network";
   const differs =
@@ -414,19 +404,7 @@ function StatusCard({
             <dt>Address</dt>
             <dd className="hrow">
               <span className="mono">{status.ipv4 || "—"}</span>
-              {status.ipv4 && (
-                <Button
-                  size="sm"
-                  onClick={() =>
-                    void copyText(status.ipv4).then((err) => {
-                      setCopied(err === null);
-                    })
-                  }
-                >
-                  Copy
-                </Button>
-              )}
-              {copied && <span className="small muted3">Copied</span>}
+              {status.ipv4 && <CopyButton text={status.ipv4} />}
             </dd>
             {connectedRow && (
               <>
