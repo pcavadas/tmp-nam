@@ -524,9 +524,16 @@ def ssh_apply(enabled):
     # The launcher exits at once when SSH is off, so restart covers both.
     os.sync()
     os.system("systemctl restart %s >/dev/null 2>&1" % SSH_SERVICE)
-    for _ in range(20):
+    # The service is "active" as soon as it forks, before Dropbear loads its
+    # host key and binds port 22, so On needs it to stay active for ~1 s.
+    stable = 0
+    for _ in range(28):
         if ssh_running() == enabled:
-            return
+            stable += 1
+            if not enabled or stable >= 4:
+                return
+        else:
+            stable = 0
         time.sleep(0.25)
     raise SystemExit("not_applied")
 

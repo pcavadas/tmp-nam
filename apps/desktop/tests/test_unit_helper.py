@@ -497,6 +497,14 @@ class SshAccessTests(unittest.TestCase):
                 self.run_cmd("ssh-set", ["1", "none"])
         self.assertEqual(str(e.exception), "not_applied")
 
+    def test_a_server_that_exits_right_after_starting_is_reported(self):
+        # systemd says "active" right after the fork, then Dropbear exits.
+        states = iter([True, False] * 20)
+        with mock.patch.object(self.helper, "ssh_running", side_effect=lambda: next(states)):
+            with self.assertRaises(SystemExit) as e:
+                self.run_cmd("ssh-set", ["1", "none"])
+        self.assertEqual(str(e.exception), "not_applied")
+
     def test_add_rejects_duplicates_several_lines_and_private_keys(self):
         self.run_cmd("ssh-add", [self.key_file(KEYS["rsa"][0])])
         for text, error in (
