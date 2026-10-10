@@ -11,6 +11,7 @@ mod pending;
 mod proto;
 mod sdcard;
 mod settings;
+mod ssh;
 mod t3k;
 mod unit;
 mod variants;
@@ -179,6 +180,19 @@ async fn blocking<T: Send + 'static>(
     tauri::async_runtime::spawn_blocking(f)
         .await
         .map_err(|e| e.to_string())?
+}
+
+/// Run a request against the connected unit, off the async runtime, mapping its error
+/// with `map_err` (`wifi_error`, `ssh_error`).
+async fn unit_call<T: Send + 'static>(
+    state: &AppState,
+    f: impl FnOnce(&mut dyn Unit) -> Result<T, String> + Send + 'static,
+    map_err: fn(String) -> ApiError,
+) -> Result<T, ApiError> {
+    let state = state.clone();
+    blocking(move || with_unit(&state, f))
+        .await
+        .map_err(map_err)
 }
 
 /// Run `f` against the connected unit, dropping the connection if it fails so the
@@ -476,15 +490,11 @@ fn wifi_error(message: String) -> ApiError {
     ApiError { code, message }
 }
 
-/// Run a Wi-Fi request against the connected unit, off the async runtime.
 async fn wifi_call<T: Send + 'static>(
     state: &AppState,
     f: impl FnOnce(&mut dyn Unit) -> Result<T, String> + Send + 'static,
 ) -> Result<T, ApiError> {
-    let state = state.clone();
-    blocking(move || with_unit(&state, f))
-        .await
-        .map_err(wifi_error)
+    unit_call(state, f, wifi_error).await
 }
 
 #[tauri::command]
@@ -534,6 +544,129 @@ async fn wifi_forget(
 ) -> Result<wifi::ForgetOutcome, ApiError> {
     log::info!("wifi forget");
     wifi_call(state.inner(), move |u| u.wifi_forget(&ssid, security)).await
+}
+
+// ── SSH access ──────────────────────────────────────────────────────────────
+
+/// An SSH error the UI can branch on: the helper's codes (`card_too_old`,
+/// `duplicate`, `invalid_key`, `no_keys`, `not_applied`, `unknown_key`),
+/// `no_answer` otherwise.
+fn ssh_error(message: String) -> ApiError {
+    const CODES: [&str; 6] = [
+        "card_too_old",
+        "duplicate",
+        "invalid_key",
+        "no_keys",
+        "not_applied",
+        "unknown_key",
+    ];
+    match CODES.iter().find(|c| **c == message) {
+        Some(code) => ApiError { code, message },
+        None => {
+            log::warn!("ssh: {message}");
+            ApiError {
+                code: "no_answer",
+                message,
+            }
+        }
+    }
+}
+
+async fn ssh_call<T: Send + 'static>(
+    state: &AppState,
+    f: impl FnOnce(&mut dyn Unit) -> Result<T, String> + Send + 'static,
+) -> Result<T, ApiError> {
+    unit_call(state, f, ssh_error).await
+}
+
+/// This computer's public key, created when missing; `key_failed` when it can't be.
+async fn this_computer_key() -> Result<ssh::PublicKey, ApiError> {
+    let message = match blocking(|| ssh::this_computer_key(true)).await {
+        Ok(Some(key)) => return Ok(key),
+        Ok(None) => "no key was created".into(),
+        Err(message) => {
+            log::warn!("ssh: this computer's key: {message}");
+            message
+        }
+    };
+    Err(ApiError {
+        code: "key_failed",
+        message,
+    })
+}
+
+#[derive(Serialize)]
+struct SshView {
+    ssh: ssh::SshState,
+    /// This computer's public key, if it has one (never created by reading).
+    this_computer: Option<ssh::PublicKey>,
+}
+
+/// `ssh` with this computer's key: `known` when the request already read it.
+async fn ssh_view(ssh: ssh::SshState, known: Option<ssh::PublicKey>) -> SshView {
+    let this_computer = match known {
+        Some(key) => Some(key),
+        None => blocking(|| ssh::this_computer_key(false))
+            .await
+            .ok()
+            .flatten(),
+    };
+    SshView { ssh, this_computer }
+}
+
+#[tauri::command]
+async fn ssh_state(state: State<'_, AppState>) -> Result<SshView, ApiError> {
+    let ssh = ssh_call(state.inner(), |u| u.ssh_state()).await?;
+    Ok(ssh_view(ssh, None).await)
+}
+
+/// This computer's public key, created when missing: the first step of turning on.
+#[tauri::command]
+async fn ssh_create_key() -> Result<ssh::PublicKey, ApiError> {
+    this_computer_key().await
+}
+
+/// On or off, and the mode (`None` keeps the stored one). Turning on in Key only also
+/// allows this computer (its key is created if missing).
+#[tauri::command]
+async fn ssh_set(
+    state: State<'_, AppState>,
+    enabled: bool,
+    mode: Option<ssh::SshMode>,
+) -> Result<SshView, ApiError> {
+    let key = match (enabled, mode) {
+        (true, Some(ssh::SshMode::Key)) => Some(this_computer_key().await?),
+        _ => None,
+    };
+    log::info!(
+        "ssh {} ({})",
+        if enabled { "on" } else { "off" },
+        mode.map_or("same mode", ssh::SshMode::arg)
+    );
+    let line = key.as_ref().map(|k| k.line.clone());
+    let ssh = ssh_call(state.inner(), move |u| {
+        u.ssh_set(enabled, mode, line.as_deref())
+    })
+    .await?;
+    Ok(ssh_view(ssh, key).await)
+}
+
+/// Allow this computer (its key is created if missing).
+#[tauri::command]
+async fn ssh_add_this_computer(state: State<'_, AppState>) -> Result<SshView, ApiError> {
+    let key = this_computer_key().await?;
+    log::info!("ssh add {}", key.fingerprint);
+    let line = key.line.clone();
+    let ssh = ssh_call(state.inner(), move |u| u.ssh_add(&line)).await?;
+    Ok(ssh_view(ssh, Some(key)).await)
+}
+
+/// Remove an allowed key, by its base64 field (`PublicKey::key`).
+#[tauri::command]
+async fn ssh_remove_key(state: State<'_, AppState>, key: String) -> Result<SshView, ApiError> {
+    log::info!("ssh remove a key");
+    let ssh = ssh_call(state.inner(), move |u| u.ssh_remove(&key)).await?;
+    Ok(ssh_view(ssh, None).await)
 }
 
 // ── Settings ────────────────────────────────────────────────────────────────
@@ -616,14 +749,6 @@ fn t3k_open_link_again() -> Result<(), String> {
 #[tauri::command]
 fn t3k_open_site() -> Result<(), String> {
     t3k::open_browser("https://www.tone3000.com")
-}
-
-/// The LAN guide's SSH section, for Settings › Wi-Fi's "How to secure it".
-#[tauri::command]
-fn open_lan_guide() -> Result<(), String> {
-    t3k::open_browser(
-        "https://github.com/pcavadas/tmp-nam/blob/main/docs/device/lan-access.md#3-exact-ssh-and-helper-installation",
-    )
 }
 
 #[tauri::command]
@@ -864,7 +989,11 @@ pub fn run() {
             wifi_set_enabled,
             wifi_join,
             wifi_forget,
-            open_lan_guide,
+            ssh_state,
+            ssh_create_key,
+            ssh_set,
+            ssh_add_this_computer,
+            ssh_remove_key,
             settings_get,
             settings_set,
             variants_list,

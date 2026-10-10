@@ -38,6 +38,7 @@ use sha2::{Digest, Sha256};
 
 use crate::console::{find_port, sh_quote, Console};
 use crate::hid::{placeholder_wav, HidSession};
+use crate::ssh::{self, SshMode, SshState};
 use crate::wifi::{self, ForgetOutcome, Join, JoinOutcome, Network, WifiState};
 
 const HELPER: &str = include_str!("unit_helper.py");
@@ -316,6 +317,19 @@ pub trait Unit: Send {
     /// `join` was checked with `wifi::check_join`.
     fn wifi_join(&mut self, join: &Join) -> Result<JoinOutcome, String>;
     fn wifi_forget(&mut self, ssid: &str, security: u32) -> Result<ForgetOutcome, String>;
+    /// SSH access as the card reports it (`supported: false` on cards too old).
+    fn ssh_state(&mut self) -> Result<SshState, String>;
+    /// Store and apply on/off and the mode (`None` keeps the stored one), first
+    /// allowing `key` (a public-key line) if given. Key only needs an allowed key.
+    fn ssh_set(
+        &mut self,
+        enabled: bool,
+        mode: Option<SshMode>,
+        key: Option<&str>,
+    ) -> Result<SshState, String>;
+    fn ssh_add(&mut self, key: &str) -> Result<SshState, String>;
+    /// Removing the last key in Key only turns SSH off.
+    fn ssh_remove(&mut self, key: &str) -> Result<SshState, String>;
 }
 
 /// Why Wi-Fi settings can't reach the engine: no permission on the HID device (Linux
@@ -1050,6 +1064,51 @@ impl Unit for ConsoleUnit {
     fn wifi_forget(&mut self, ssid: &str, security: u32) -> Result<ForgetOutcome, String> {
         self.wifi(false, |h| wifi::forget_network(h, ssid, security))
     }
+
+    fn ssh_state(&mut self) -> Result<SshState, String> {
+        self.ssh_helper("ssh-state", &[])
+    }
+
+    fn ssh_set(
+        &mut self,
+        enabled: bool,
+        mode: Option<SshMode>,
+        key: Option<&str>,
+    ) -> Result<SshState, String> {
+        let mut args = vec![
+            if enabled { "1" } else { "0" }.to_string(),
+            mode.map_or("keep", SshMode::arg).into(),
+        ];
+        if let Some(line) = key {
+            self.console
+                .write_text(SSH_KEY_PATH, &format!("{line}\n"))?;
+            args.push(SSH_KEY_PATH.into());
+        }
+        self.ssh_helper("ssh-set", &args)
+    }
+
+    fn ssh_add(&mut self, key: &str) -> Result<SshState, String> {
+        self.console.write_text(SSH_KEY_PATH, &format!("{key}\n"))?;
+        self.ssh_helper("ssh-add", &[SSH_KEY_PATH.into()])
+    }
+
+    fn ssh_remove(&mut self, key: &str) -> Result<SshState, String> {
+        self.ssh_helper("ssh-remove", &[key.into()])
+    }
+}
+
+/// Where a public key is written for the helper (keys aren't secret).
+const SSH_KEY_PATH: &str = "/tmp/tmpnam_key.pub";
+
+impl ConsoleUnit {
+    /// An `ssh-*` helper command; it answers with the state, or an error code
+    /// (`card_too_old`, `duplicate`, `invalid_key`, `no_keys`, `not_applied`, `unknown_key`).
+    fn ssh_helper(&mut self, cmd: &str, args: &[String]) -> Result<SshState, String> {
+        let v = self.helper(cmd, args, 60)?;
+        serde_json::from_value::<ssh::UnitReport>(v)
+            .map(SshState::from)
+            .map_err(|e| format!("bad SSH state: {e}"))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1065,6 +1124,78 @@ struct SimState {
     /// Simulated unplug: the unit is gone until this instant.
     offline_until: Option<Instant>,
     wifi: SimWifi,
+    ssh: SimSsh,
+}
+
+/// Simulated SSH access: off with no keys; `TMP_NAM_SIM_SSH=old` is a card too old.
+struct SimSsh {
+    state: SshState,
+}
+
+impl SimSsh {
+    fn seeded() -> Self {
+        let supported = std::env::var("TMP_NAM_SIM_SSH").map_or(true, |v| v != "old");
+        SimSsh {
+            state: SshState {
+                supported,
+                enabled: !supported,
+                mode: if supported {
+                    SshMode::Key
+                } else {
+                    SshMode::None
+                },
+                keys: vec![],
+            },
+        }
+    }
+
+    fn require_card(&self) -> Result<(), String> {
+        if self.state.supported {
+            Ok(())
+        } else {
+            Err("card_too_old".into())
+        }
+    }
+
+    fn add(&mut self, line: &str) -> Result<bool, String> {
+        let key = ssh::parse_key(line).ok_or("invalid_key")?;
+        if self.state.keys.iter().any(|k| k.key == key.key) {
+            return Ok(false);
+        }
+        self.state.keys.push(key);
+        Ok(true)
+    }
+
+    fn set(
+        &mut self,
+        enabled: bool,
+        mode: Option<SshMode>,
+        key: Option<&str>,
+    ) -> Result<SshState, String> {
+        self.require_card()?;
+        let mode = mode.unwrap_or(self.state.mode);
+        if let Some(line) = key {
+            self.add(line)?;
+        }
+        if enabled && mode == SshMode::Key && self.state.keys.is_empty() {
+            return Err("no_keys".into());
+        }
+        (self.state.enabled, self.state.mode) = (enabled, mode);
+        Ok(self.state.clone())
+    }
+
+    fn remove(&mut self, key: &str) -> Result<SshState, String> {
+        self.require_card()?;
+        let before = self.state.keys.len();
+        self.state.keys.retain(|k| k.key != key);
+        if self.state.keys.len() == before {
+            return Err("unknown_key".into());
+        }
+        if self.state.keys.is_empty() && self.state.mode == SshMode::Key {
+            self.state.enabled = false;
+        }
+        Ok(self.state.clone())
+    }
 }
 
 /// Failure to simulate on the next send (`TMP_NAM_SIM_FAIL`): `disconnect` (mid-file),
@@ -1114,6 +1245,7 @@ impl SimState {
             options: BTreeMap::new(),
             offline_until: None,
             wifi: SimWifi::seeded(),
+            ssh: SimSsh::seeded(),
         };
         let a2 = |name: &str, make: &str, gear: &str| ModelInfo {
             architecture: Some("SlimmableContainer".into()),
@@ -1412,6 +1544,37 @@ impl Unit for SimUnit {
         std::thread::sleep(Duration::from_millis(600));
         Ok(Self::with(|s| s.wifi.forget(ssid, security)))
     }
+
+    fn ssh_state(&mut self) -> Result<SshState, String> {
+        std::thread::sleep(Duration::from_millis(200));
+        Ok(Self::with(|s| s.ssh.state.clone()))
+    }
+
+    fn ssh_set(
+        &mut self,
+        enabled: bool,
+        mode: Option<SshMode>,
+        key: Option<&str>,
+    ) -> Result<SshState, String> {
+        std::thread::sleep(Duration::from_millis(1200));
+        Self::with(|s| s.ssh.set(enabled, mode, key))
+    }
+
+    fn ssh_add(&mut self, key: &str) -> Result<SshState, String> {
+        std::thread::sleep(Duration::from_millis(800));
+        Self::with(|s| {
+            s.ssh.require_card()?;
+            if !s.ssh.add(key)? {
+                return Err("duplicate".into());
+            }
+            Ok(s.ssh.state.clone())
+        })
+    }
+
+    fn ssh_remove(&mut self, key: &str) -> Result<SshState, String> {
+        std::thread::sleep(Duration::from_millis(800));
+        Self::with(|s| s.ssh.remove(key))
+    }
 }
 
 /// Simulated Wi-Fi situation (`TMP_NAM_SIM_WIFI`): `off` (radio off), `noradio` (no
@@ -1608,6 +1771,50 @@ impl SimWifi {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const ED25519: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILi8KzRrtyJmUSNagtW73E1WgHF2YdXmSwVpuHnQjg6t test@ed25519";
+    const ED25519_KEY: &str =
+        "AAAAC3NzaC1lZDI1NTE5AAAAILi8KzRrtyJmUSNagtW73E1WgHF2YdXmSwVpuHnQjg6t";
+
+    #[test]
+    fn sim_ssh_follows_the_card_rules() {
+        let mut ssh = SimSsh {
+            state: SshState {
+                supported: true,
+                enabled: false,
+                mode: SshMode::Key,
+                keys: vec![],
+            },
+        };
+        // Key only needs a key; enabling with one stores it once.
+        assert_eq!(
+            ssh.set(true, Some(SshMode::Key), None),
+            Err("no_keys".into())
+        );
+        let on = ssh.set(true, Some(SshMode::Key), Some(ED25519)).unwrap();
+        assert!(on.enabled && on.keys.len() == 1);
+        assert_eq!(
+            ssh.set(true, Some(SshMode::Key), Some(ED25519))
+                .unwrap()
+                .keys
+                .len(),
+            1
+        );
+        // No security keeps the list; removing the last key there doesn't turn off.
+        let open = ssh.set(true, Some(SshMode::None), None).unwrap();
+        assert_eq!((open.mode, open.keys.len()), (SshMode::None, 1));
+        // Off keeps the stored mode.
+        let off = ssh.set(false, None, None).unwrap();
+        assert_eq!((off.enabled, off.mode), (false, SshMode::None));
+        // In Key only, removing the last key turns SSH off.
+        ssh.set(true, Some(SshMode::Key), None).unwrap();
+        let off = ssh.remove(ED25519_KEY).unwrap();
+        assert!(!off.enabled && off.keys.is_empty());
+        assert_eq!(ssh.remove(ED25519_KEY), Err("unknown_key".into()));
+        // A card too old refuses every change.
+        ssh.state.supported = false;
+        assert_eq!(ssh.set(false, None, None), Err("card_too_old".into()));
+    }
 
     #[test]
     fn option_patch_distinguishes_keep_remove_and_set() {

@@ -38,14 +38,19 @@ def read_json(path, default):
         return default
 
 
-def write_json(path, data, indent=None):
+def write_atomic(path, text, mode=0o644):
     tmp = path + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(data, f, indent=indent)
-        f.write("\n")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
         f.flush()
         os.fsync(f.fileno())
+    os.chmod(tmp, mode)
     os.rename(tmp, path)
+
+
+def write_json(path, data, indent=None):
+    write_atomic(path, json.dumps(data, indent=indent) + "\n")
 
 
 def sha256_path(path):
@@ -408,7 +413,174 @@ def cmd_opts(args):
     emit(result)
 
 
+# --- SSH access ------------------------------------------------------------
+# The card's launcher (nam-ssh.sh) starts Dropbear at every boot as SSH_STATE
+# says. Root's ~/.ssh/authorized_keys on the card points at SSH_KEYS.
+
+SSH_DIR = "/data/nam/ssh"
+SSH_STATE = SSH_DIR + "/state"
+SSH_KEYS = SSH_DIR + "/authorized_keys"
+SSH_LAUNCHER = "/usr/local/bin/nam-ssh.sh"
+SSH_SERVICE = "dropbear-nam.service"
+
+
+def key_blob(line):
+    """The base64 field of a key line, which identifies the key."""
+    parts = line.split()
+    return parts[1] if len(parts) > 1 else None
+
+
+def read_keys():
+    """The allowed key lines, as stored (the app parses them)."""
+    try:
+        with open(SSH_KEYS) as f:
+            return [l.strip() for l in f.read().splitlines() if l.strip()]
+    except OSError:
+        return []
+
+
+def write_private(path, text):
+    if not os.path.isdir(SSH_DIR):
+        os.makedirs(SSH_DIR)
+    os.chmod(SSH_DIR, 0o700)
+    write_atomic(path, text, 0o600)
+
+
+def write_keys(keys):
+    write_private(SSH_KEYS, "".join(k + "\n" for k in keys))
+
+
+def read_ssh_state():
+    state = {"enabled": False, "mode": "key"}
+    try:
+        with open(SSH_STATE) as f:
+            for row in f.read().splitlines():
+                key, _, value = row.partition("=")
+                if key == "enabled":
+                    state["enabled"] = value.strip() == "1"
+                elif key == "mode" and value.strip() in ("key", "none"):
+                    state["mode"] = value.strip()
+    except OSError:
+        pass
+    return state
+
+
+def write_ssh_state(state):
+    text = "enabled=%d\nmode=%s\n" % (1 if state["enabled"] else 0,
+                                      state["mode"])
+    write_private(SSH_STATE, text)
+
+
+def ssh_running():
+    out = os.popen("systemctl is-active %s 2>/dev/null" % SSH_SERVICE)
+    return out.read().strip() == "active"
+
+
+def ssh_apply(enabled):
+    """Restart Dropbear as stored; `not_applied` when it doesn't reach that state
+    (the choice stays stored and applies at the next start)."""
+    # The launcher exits at once when SSH is off, so restart covers both.
+    os.sync()
+    os.system("systemctl restart %s >/dev/null 2>&1" % SSH_SERVICE)
+    # The service is "active" as soon as it forks, before Dropbear loads its
+    # host key and binds port 22, so On needs it to stay active for ~1 s.
+    stable = 0
+    for _ in range(28):
+        if ssh_running() == enabled:
+            stable += 1
+            if not enabled or stable >= 4:
+                return
+        else:
+            stable = 0
+        time.sleep(0.25)
+    raise SystemExit("not_applied")
+
+
+def ssh_report(state, keys):
+    emit({"supported": True, "enabled": state["enabled"],
+          "mode": state["mode"], "keys": keys})
+
+
+def ssh_require_card():
+    if not os.path.exists(SSH_LAUNCHER):
+        raise SystemExit("card_too_old")
+
+
+def ssh_add(path, keys):
+    """Add the key line in file `path` to `keys` unless present (same base64
+    field); the new list. The app sends only this computer's checked .pub."""
+    with open(path) as f:
+        lines = [" ".join(l.split()) for l in f.read().splitlines() if l.strip()]
+    if len(lines) != 1 or not key_blob(lines[0]) or "PRIVATE" in lines[0]:
+        raise SystemExit("invalid_key")
+    if any(key_blob(k) == key_blob(lines[0]) for k in keys):
+        return keys, False
+    return keys + lines, True
+
+
+def cmd_ssh_state(_args):
+    if not os.path.exists(SSH_LAUNCHER):
+        emit({"supported": False})
+        return
+    ssh_report(read_ssh_state(), read_keys())
+
+
+def cmd_ssh_set(args):
+    """ssh-set <0|1> <key|none|keep> [keyfile]: store, add the key, apply."""
+    ssh_require_card()
+    enabled, mode = args[0] == "1", args[1]
+    if mode == "keep":
+        mode = read_ssh_state()["mode"]
+    if mode not in ("key", "none"):
+        raise SystemExit("invalid_mode")
+    keys = read_keys()
+    if len(args) > 2:
+        keys, added = ssh_add(args[2], keys)
+        if added:
+            write_keys(keys)
+    if enabled and mode == "key" and not keys:
+        raise SystemExit("no_keys")
+    state = {"enabled": enabled, "mode": mode}
+    write_ssh_state(state)
+    ssh_apply(enabled)
+    ssh_report(state, keys)
+
+
+def cmd_ssh_add(args):
+    """ssh-add <keyfile>: allow one more key (no restart needed)."""
+    ssh_require_card()
+    keys, added = ssh_add(args[0], read_keys())
+    if not added:
+        raise SystemExit("duplicate")
+    write_keys(keys)
+    os.sync()
+    ssh_report(read_ssh_state(), keys)
+
+
+def cmd_ssh_remove(args):
+    """ssh-remove <base64 key>: removing the last key in Key only turns SSH
+    off, now and at every start."""
+    ssh_require_card()
+    keys = read_keys()
+    left = [k for k in keys if key_blob(k) != args[0]]
+    if len(left) == len(keys):
+        raise SystemExit("unknown_key")
+    write_keys(left)
+    state = read_ssh_state()
+    if not left and state["mode"] == "key" and state["enabled"]:
+        state["enabled"] = False
+        write_ssh_state(state)
+        ssh_apply(False)
+    else:
+        os.sync()
+    ssh_report(state, left)
+
+
 COMMANDS = {
+    "ssh-state": cmd_ssh_state,
+    "ssh-set": cmd_ssh_set,
+    "ssh-add": cmd_ssh_add,
+    "ssh-remove": cmd_ssh_remove,
     "info": cmd_info,
     "list": cmd_list,
     "register": cmd_register,

@@ -1,7 +1,9 @@
-// src/ds/Wifi.tsx — signal strength, the network list and its rows (Settings › Wi-Fi).
+// src/ds/Wifi.tsx — signal strength, the network list and its rows, and allowed-computer
+// rows (Settings › Wi-Fi).
 
 import type { ReactNode } from "react";
 import { Button, Spinner, Tag } from "./Button";
+import { Icon } from "./Icon";
 import { cx, signalBars, signalLevel } from "./util";
 
 /** A Wi-Fi fan with four levels; the percentage is only in the accessible name and tooltip. */
@@ -123,16 +125,74 @@ export function NetworkRow({
   );
 }
 
+/** One computer allowed to log in over SSH: never the key, only its name and fingerprint. */
+export function KeyRow({
+  name,
+  type,
+  shortFingerprint,
+  fingerprint,
+  tag,
+  onRemove,
+  disabledReason,
+}: {
+  name: string;
+  /** "ED25519". */
+  type: string;
+  /** "SHA256:q3Zt…X9eK". */
+  shortFingerprint: string;
+  /** Full fingerprint, for the tooltip. */
+  fingerprint: string;
+  /** "This Mac" or "Valid key". */
+  tag?: ReactNode;
+  onRemove?: () => void;
+  /** Set while Remove… is unavailable; shown as its tooltip. */
+  disabledReason?: string;
+}) {
+  return (
+    <li className="tn-net" aria-label={name}>
+      <span className="tn-key-icon">
+        <Icon name="key" />
+      </span>
+      <span className="tn-net-text">
+        <span className="tn-net-name" title={name}>
+          {name}
+        </span>
+        <span className="tn-net-caption" title={fingerprint}>
+          {type} · {shortFingerprint}
+        </span>
+      </span>
+      <span className="tn-net-actions">
+        {tag}
+        {onRemove && (
+          <Button
+            size="sm"
+            destructiveText
+            disabled={disabledReason !== undefined}
+            title={disabledReason}
+            aria-label={`Remove ${name}`}
+            onClick={onRemove}
+          >
+            Remove…
+          </Button>
+        )}
+      </span>
+    </li>
+  );
+}
+
 /** The grouped network card: rows, a first scan in progress, or nothing found. */
 export function NetworkList({
   state,
   empty,
+  label = "Networks",
   children,
 }: {
   state: "rows" | "scanning" | "empty";
   /** What to say when nothing was found. */
   empty?: ReactNode;
-  /** `NetworkRow`s. */
+  /** The list's accessible name (e.g. "Allowed computers"). */
+  label?: string;
+  /** `NetworkRow`s or `KeyRow`s. */
   children?: ReactNode;
 }) {
   if (state === "scanning")
@@ -152,7 +212,7 @@ export function NetworkList({
       </div>
     );
   return (
-    <ul className="tn-card tn-netlist" aria-label="Networks">
+    <ul className="tn-card tn-netlist" aria-label={label}>
       {children}
     </ul>
   );

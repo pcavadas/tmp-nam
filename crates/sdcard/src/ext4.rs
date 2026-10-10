@@ -10,6 +10,7 @@ use serde_json::Value;
 
 use crate::firmware::{safe_member_name, Kind, Record};
 use crate::release::{Pin, Release};
+use crate::rootfs;
 use crate::run;
 use crate::templates::{self, LAN_SERVICE_DROPIN};
 use crate::util::{assert_file, bail, locate_tool, sha256_file, Error, Result};
@@ -230,6 +231,8 @@ fn verify(
         (a.dropbear.target.clone(), 0o755),
         (a.dropbearkey.target.clone(), 0o755),
         (a.dropbear_service.target.clone(), 0o644),
+        (a.ssh_launcher.target.clone(), 0o755),
+        (rootfs::SSH_DIR.to_string(), 0o700),
         (a.t3k.target.clone(), 0o755),
         (layout.lan_setup_target.clone(), 0o755),
         (layout.lan_service_target.clone(), 0o644),
@@ -249,7 +252,13 @@ fn verify(
         .prefix("nam-image-verify-")
         .tempdir()?;
     let mut pinned: Vec<(&str, Pin)> = vec![(&a.nam_dispatch.target, a.nam_dispatch.pin())];
-    for x in [&a.dropbear, &a.dropbearkey, &a.dropbear_service, &a.t3k] {
+    for x in [
+        &a.dropbear,
+        &a.dropbearkey,
+        &a.dropbear_service,
+        &a.ssh_launcher,
+        &a.t3k,
+    ] {
         pinned.push((&x.target, x.pin()));
     }
     pinned.push((&priority.target, priority.patched.clone()));
@@ -288,6 +297,20 @@ fn verify(
     ] {
         if request(debugfs, image, &format!("cat /{path}"))?.trim() != expected.trim() {
             return bail(what);
+        }
+    }
+    // The links the builder adds: the USB console's enable link, and root's
+    // authorized_keys, which points at the allow-list the app keeps on /data.
+    for (path, dest) in [
+        (
+            layout.console_enable_target.as_str(),
+            rootfs::CONSOLE_ENABLE_LINK,
+        ),
+        (rootfs::AUTHORIZED_KEYS_LINK, rootfs::AUTHORIZED_KEYS),
+    ] {
+        let link = request(debugfs, image, &format!("stat /{path}"))?;
+        if !link.contains(&format!("Fast link dest: \"{dest}\"")) {
+            return bail(format!("{path} link mismatch in ext4 image"));
         }
     }
     if !by_path.contains_key("boot/Image") {

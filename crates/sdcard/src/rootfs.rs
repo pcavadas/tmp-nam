@@ -65,6 +65,33 @@ fn copy_asset(rootfs: &Path, device: &DeviceDir, asset: &Asset, mode: u32) -> Re
     Ok(())
 }
 
+/// Root's SSH directory on the read-only root, and its `authorized_keys`, which points
+/// at the allow-list the app keeps on internal storage so it survives new cards.
+/// Dropbear checks the file with `stat`, which follows the link.
+pub const SSH_DIR: &str = "home/root/.ssh";
+pub const AUTHORIZED_KEYS_LINK: &str = "home/root/.ssh/authorized_keys";
+pub const AUTHORIZED_KEYS: &str = "/data/nam/ssh/authorized_keys";
+
+/// What the USB console's enable link (`layout.console_enable_target`) points at.
+pub const CONSOLE_ENABLE_LINK: &str = "../usb-console.service";
+
+fn link_authorized_keys(rootfs: &Path) -> Result<()> {
+    let dir = rootfs.join(SSH_DIR);
+    if dir.is_symlink() {
+        return bail(format!("unexpected symlink in source rootfs: {SSH_DIR}"));
+    }
+    std::fs::create_dir_all(&dir)?;
+    chmod(&dir, 0o700)?;
+    let link = rootfs.join(AUTHORIZED_KEYS_LINK);
+    if exists_or_link(&link) {
+        return bail(format!(
+            "unexpected existing rootfs file: {AUTHORIZED_KEYS_LINK}"
+        ));
+    }
+    symlink(AUTHORIZED_KEYS, &link)?;
+    Ok(())
+}
+
 fn replace_once(text: &str, old: &str, new: &str) -> String {
     text.replacen(old, new, 1)
 }
@@ -205,7 +232,7 @@ pub fn apply(
     if exists_or_link(&enable) {
         return bail("usb-console service is already enabled in source rootfs");
     }
-    symlink("../usb-console.service", &enable)?;
+    symlink(CONSOLE_ENABLE_LINK, &enable)?;
 
     copy_asset(rootfs, device, &assets.nam_dispatch, 0o755)?;
 
@@ -232,6 +259,8 @@ pub fn apply(
     copy_asset(rootfs, device, &assets.dropbear, 0o755)?;
     copy_asset(rootfs, device, &assets.dropbearkey, 0o755)?;
     copy_asset(rootfs, device, &assets.dropbear_service, 0o644)?;
+    copy_asset(rootfs, device, &assets.ssh_launcher, 0o755)?;
+    link_authorized_keys(rootfs)?;
     copy_asset(rootfs, device, &assets.t3k, 0o755)?;
     write_new_file(
         &rootfs.join(&layout.lan_setup_target),

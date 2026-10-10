@@ -23,6 +23,7 @@ import { applyEvent, startOp, type OpKind, type Operation } from "./operation";
 import { useSdBuild } from "./sd";
 import { useT3k } from "./t3k";
 import { useUnitConnection } from "./unit";
+import { useSsh } from "./ssh";
 import { useWifi } from "./wifi";
 
 export function AppProvider({ children }: { children: ReactNode }) {
@@ -42,6 +43,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const sd = useSdBuild();
   const wifi = useWifi();
   const { reset: resetWifi } = wifi;
+  const ssh = useSsh();
+  const { reset: resetSsh } = ssh;
   const { deselect } = t3k;
 
   const connected = conn.status === "connected";
@@ -73,8 +76,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [connected, refreshCaptures]);
 
   useEffect(() => {
-    if (!connected) defer(resetWifi);
-  }, [connected, resetWifi]);
+    if (!connected)
+      defer(() => {
+        resetWifi();
+        resetSsh();
+      });
+  }, [connected, resetWifi, resetSsh]);
 
   const busyReason = op
     ? "Available when the transfer finishes"
@@ -85,7 +92,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
         : null;
   const unitBusyReason =
     busyReason ??
-    (wifi.activity ? "Available when the Wi-Fi change finishes" : null);
+    (wifi.activity
+      ? wifi.activity.kind === "reading"
+        ? "Available when the unit's Wi-Fi has been read"
+        : "Available when the Wi-Fi change finishes"
+      : ssh.activity
+        ? ssh.activity.kind === "reading"
+          ? "Available when SSH access has been read"
+          : "Available when the SSH change finishes"
+        : null);
 
   const run = useCallback(
     async (kind: OpKind, sources: Source[]) => {
@@ -243,6 +258,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       t3k,
       sd,
       wifi,
+      ssh,
     }),
     [
       page,
@@ -267,6 +283,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       t3k,
       sd,
       wifi,
+      ssh,
     ],
   );
 

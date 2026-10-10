@@ -364,5 +364,140 @@ class PlayerOptionsTests(unittest.TestCase):
                     self.assert_rejected_without_write()
 
 
+# Throwaway public keys (the app parses them; the helper stores whole lines).
+ED25519 = ("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILi8KzRrtyJmUSNagtW73E1WgHF2YdXmSwVpuHnQjg6t "
+           "test@ed25519")
+ECDSA = ("ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBDenZRcqGdj"
+         "LSIZuWCtazk44QdTa3uKbMzi4m58hYn0YTvZCG1UJAMHr1pdI08bzhic7WqnAZLb/gIdjBFEwie0= "
+         "test@ecdsa256")
+
+
+def blob(line):
+    return line.split()[1]
+
+
+class SshAccessTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        spec = importlib.util.spec_from_file_location("unit_helper", str(HELPER))
+        self.helper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.helper)
+        h = self.helper
+        h.SSH_DIR = str(root / "ssh")
+        h.SSH_STATE = h.SSH_DIR + "/state"
+        h.SSH_KEYS = h.SSH_DIR + "/authorized_keys"
+        h.SSH_LAUNCHER = str(root / "nam-ssh.sh")
+        Path(h.SSH_LAUNCHER).write_text("#!/bin/sh\n")
+        self.root = root
+        self.restarts = []
+        for patch in (
+            mock.patch.object(h.os, "system", side_effect=self.system),
+            mock.patch.object(h, "ssh_running", side_effect=lambda: self.running),
+            mock.patch.object(h.time, "sleep"),
+        ):
+            patch.start()
+            self.addCleanup(patch.stop)
+        self.running = False
+
+    def system(self, cmd):
+        if "restart" in cmd:
+            self.restarts.append(cmd)
+            self.running = self.helper.read_ssh_state()["enabled"]
+        return 0
+
+    def key_file(self, line):
+        path = self.root / "key.pub"
+        path.write_text(line + "\n")
+        return str(path)
+
+    def run_cmd(self, name, args):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.helper.COMMANDS[name](args)
+        return json.loads(output.getvalue())
+
+    def test_off_by_default_and_card_too_old(self):
+        self.assertEqual(self.run_cmd("ssh-state", []),
+                         {"supported": True, "enabled": False, "mode": "key",
+                          "keys": []})
+        os.remove(self.helper.SSH_LAUNCHER)
+        self.assertEqual(self.run_cmd("ssh-state", []), {"supported": False})
+        with self.assertRaises(SystemExit) as e:
+            self.run_cmd("ssh-set", ["1", "key", self.key_file(ED25519)])
+        self.assertEqual(str(e.exception), "card_too_old")
+
+    def test_enable_installs_the_key_privately_and_starts(self):
+        # Extra spaces are normalized.
+        state = self.run_cmd("ssh-set", ["1", "key", self.key_file("  " + ED25519.replace(" ", "  "))])
+        self.assertEqual((state["enabled"], state["mode"], self.running),
+                         (True, "key", True))
+        self.assertEqual(state["keys"], [ED25519])
+        self.assertEqual(os.stat(self.helper.SSH_KEYS).st_mode & 0o777, 0o600)
+        self.assertEqual(os.stat(self.helper.SSH_DIR).st_mode & 0o777, 0o700)
+        self.assertEqual(Path(self.helper.SSH_STATE).read_text(), "enabled=1\nmode=key\n")
+        # Enabling again with the same key doesn't duplicate it.
+        state = self.run_cmd("ssh-set", ["1", "key", self.key_file(ED25519)])
+        self.assertEqual(len(state["keys"]), 1)
+
+    def test_key_only_needs_a_key(self):
+        with self.assertRaises(SystemExit) as e:
+            self.run_cmd("ssh-set", ["1", "key"])
+        self.assertEqual(str(e.exception), "no_keys")
+        self.assertFalse(os.path.exists(self.helper.SSH_STATE))
+
+    def test_no_security_and_off(self):
+        state = self.run_cmd("ssh-set", ["1", "none"])
+        self.assertEqual((state["enabled"], state["mode"]), (True, "none"))
+        # Off keeps the stored mode.
+        state = self.run_cmd("ssh-set", ["0", "keep"])
+        self.assertEqual((state["enabled"], state["mode"], self.running),
+                         (False, "none", False))
+
+    def test_a_server_that_does_not_start_is_reported(self):
+        # The restart leaves Dropbear down.
+        with mock.patch.object(self.helper.os, "system", return_value=0):
+            with self.assertRaises(SystemExit) as e:
+                self.run_cmd("ssh-set", ["1", "none"])
+        self.assertEqual(str(e.exception), "not_applied")
+
+    def test_a_server_that_exits_right_after_starting_is_reported(self):
+        # systemd says "active" right after the fork, then Dropbear exits.
+        states = iter([True, False] * 20)
+        with mock.patch.object(self.helper, "ssh_running", side_effect=lambda: next(states)):
+            with self.assertRaises(SystemExit) as e:
+                self.run_cmd("ssh-set", ["1", "none"])
+        self.assertEqual(str(e.exception), "not_applied")
+
+    def test_add_rejects_duplicates_several_lines_and_private_keys(self):
+        self.run_cmd("ssh-add", [self.key_file(ED25519)])
+        for text, error in (
+            # The same key under another comment is a duplicate.
+            (ED25519.replace("test@ed25519", "other"), "duplicate"),
+            (ED25519 + "\n" + ECDSA, "invalid_key"),
+            ("hello", "invalid_key"),
+            ("-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaA==\n", "invalid_key"),
+        ):
+            with self.assertRaises(SystemExit) as e:
+                self.run_cmd("ssh-add", [self.key_file(text)])
+            self.assertEqual(str(e.exception), error)
+        self.assertNotIn("PRIVATE", Path(self.helper.SSH_KEYS).read_text())
+        # Adding needs no restart: Dropbear reads the file at each login.
+        self.assertEqual(self.restarts, [])
+
+    def test_removing_the_last_key_turns_key_only_off(self):
+        self.run_cmd("ssh-set", ["1", "key", self.key_file(ED25519)])
+        self.run_cmd("ssh-add", [self.key_file(ECDSA)])
+        state = self.run_cmd("ssh-remove", [blob(ED25519)])
+        self.assertEqual((state["enabled"], state["keys"]), (True, [ECDSA]))
+        state = self.run_cmd("ssh-remove", [blob(ECDSA)])
+        self.assertEqual((state["enabled"], self.running, state["keys"]),
+                         (False, False, []))
+        with self.assertRaises(SystemExit) as e:
+            self.run_cmd("ssh-remove", [blob(ECDSA)])
+        self.assertEqual(str(e.exception), "unknown_key")
+
+
 if __name__ == "__main__":
     unittest.main()

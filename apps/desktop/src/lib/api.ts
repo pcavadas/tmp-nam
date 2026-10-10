@@ -269,6 +269,36 @@ export type WifiJoinOutcome =
 /** The unit only forgets a network that's in range. */
 export type WifiForgetOutcome = "forgotten" | "out_of_range";
 
+/** key: allowed computers only, never passwords. none: anyone, as root, no password. */
+export type SshMode = "key" | "none";
+
+export interface AuthorizedKey {
+  type: string;
+  bits: number | null;
+  comment: string;
+  /** "SHA256:…", as `ssh-keygen -l` prints it. */
+  fingerprint: string;
+  /** The key's base64 field (public): what Remove sends. */
+  key: string;
+}
+
+export interface SshState {
+  /** false: a card made before SSH access could be switched (open, no password). */
+  supported: boolean;
+  enabled: boolean;
+  mode: SshMode;
+  keys: AuthorizedKey[];
+}
+
+/** A parsed public key. */
+export type PublicKey = AuthorizedKey;
+
+export interface SshView {
+  ssh: SshState;
+  /** This computer's key, if it has one. */
+  this_computer: PublicKey | null;
+}
+
 /** An error from a command that classifies its failures (Tone3000). */
 export class ApiError extends Error {
   constructor(
@@ -350,8 +380,20 @@ export const api = {
   wifiJoin: (join: WifiJoin) => call<WifiJoinOutcome>("wifi_join", { join }),
   wifiForget: (ssid: string, security: number) =>
     call<WifiForgetOutcome>("wifi_forget", { ssid, security }),
-  /** The LAN guide's SSH section in the system browser. */
-  openLanGuide: () => call<null>("open_lan_guide"),
+
+  /** SSH access as the card reports it, plus this computer's key if it has one. */
+  sshState: () => call<SshView>("ssh_state"),
+  /** This computer's public key, created when missing (first step of turning on). */
+  sshCreateKey: () => call<PublicKey>("ssh_create_key"),
+  /** On or off, and the mode (null keeps the stored one). Turning on in Key only
+   * also allows this computer. */
+  sshSet: (enabled: boolean, mode: SshMode | null) =>
+    call<SshView>("ssh_set", { enabled, mode }),
+  /** Allow this computer (its key is created if missing). */
+  sshAddThisComputer: () => call<SshView>("ssh_add_this_computer"),
+  /** Removing the last key in Key only turns SSH off. */
+  sshRemoveKey: (k: AuthorizedKey) =>
+    call<SshView>("ssh_remove_key", { key: k.key }),
 
   settingsGet: () => call<Settings>("settings_get"),
   settingsSet: (settings: Settings) => call<null>("settings_set", { settings }),

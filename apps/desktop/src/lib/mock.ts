@@ -21,6 +21,8 @@
 //   ?wifi=off|noradio|nohid|fender|silent|differs   Wi-Fi off, no radio, HID channel held
 //                        by another app, FENDER_UPDATE profile present, a join
 //                        that gets no answer, saved setting Off while the radio is on
+//   ?ssh=old|keyfail|silent   card too old for SSH access, this Mac's key can't be
+//                        created, SSH requests get no answer
 
 import { ApiError, SECURITY } from "./api";
 import type {
@@ -32,7 +34,10 @@ import type {
   ModelInfo,
   OpEvent,
   SdEnvironment,
+  PublicKey,
   Settings,
+  SshMode,
+  SshState,
   T3kPick,
   T3kTone,
   Variant,
@@ -409,9 +414,62 @@ function wifiForget(ssid: string, security: number): WifiForgetOutcome {
   return "forgotten";
 }
 
-/** Tests start each case from the seeded Wi-Fi. */
+// ── SSH access (mirrors `SimSsh`) ──────────────────────────────────────────
+
+interface MockSsh {
+  state: SshState;
+  /** This computer's key, once "created". */
+  thisComputer: PublicKey | null;
+}
+
+let ssh: MockSsh | null = null;
+const mockSsh = (): MockSsh =>
+  (ssh ??= {
+    state: {
+      supported: flag("ssh") !== "old",
+      enabled: flag("ssh") === "old",
+      mode: flag("ssh") === "old" ? "none" : "key",
+      keys: [],
+    },
+    thisComputer: null,
+  });
+
+const MOCK_MAC_KEY: PublicKey = {
+  type: "ssh-ed25519",
+  bits: 256,
+  comment: "me@This-Mac",
+  fingerprint: "SHA256:MockThisComputerKeyForTheBrowserOnly0000000",
+  key: "AAAAC3NzaC1lZDI1NTE5AAAAIMockThisComputerKeyForTheBrowserOnly",
+};
+
+/** Runs `f` on the card, answering like `ssh_set`/`ssh_add_this_computer`/`ssh_remove_key`. */
+async function sshRequest(
+  ms: number,
+  f: (s: MockSsh) => void,
+): Promise<{ ssh: SshState; this_computer: PublicKey | null }> {
+  await sleep(ms);
+  if (flag("ssh") === "silent") {
+    await sleep(3000);
+    throw new ApiError("no_answer", "The unit didn't answer.");
+  }
+  const s = mockSsh();
+  if (!s.state.supported) throw new ApiError("card_too_old", "card_too_old");
+  f(s);
+  return { ssh: s.state, this_computer: s.thisComputer };
+}
+
+/** Allow this computer ("created" when missing); false when it already was. */
+function mockAllowThisComputer(s: MockSsh): boolean {
+  s.thisComputer ??= MOCK_MAC_KEY;
+  if (s.state.keys.some((k) => k.key === MOCK_MAC_KEY.key)) return false;
+  s.state.keys = [...s.state.keys, MOCK_MAC_KEY];
+  return true;
+}
+
+/** Tests start each case from the seeded Wi-Fi and SSH. */
 export function resetMockWifi() {
   seeded = null;
+  ssh = null;
 }
 
 /** Mirrors `sim_restart`: the restart fallback instead of the HID channel. */
@@ -675,7 +733,49 @@ export async function mockInvoke(
       linked = true;
       return "riffwright";
     }
-    case "open_lan_guide":
+    case "ssh_state": {
+      await sleep(200);
+      const s = mockSsh();
+      return { ssh: s.state, this_computer: s.thisComputer };
+    }
+    case "ssh_create_key": {
+      await sleep(900);
+      if (flag("ssh") === "keyfail")
+        throw new ApiError(
+          "key_failed",
+          "~/.ssh/id_ed25519.pub: Permission denied",
+        );
+      const s = mockSsh();
+      s.thisComputer ??= MOCK_MAC_KEY;
+      return s.thisComputer;
+    }
+    case "ssh_set":
+      return sshRequest(1200, (s) => {
+        const enabled = args.enabled as boolean;
+        const mode = (args.mode as SshMode | null) ?? s.state.mode;
+        if (enabled && mode === "key") mockAllowThisComputer(s);
+        if (enabled && mode === "key" && s.state.keys.length === 0)
+          throw new ApiError("no_keys", "no_keys");
+        s.state = { ...s.state, enabled, mode };
+      });
+    case "ssh_add_this_computer":
+      return sshRequest(1000, (s) => {
+        if (!mockAllowThisComputer(s))
+          throw new ApiError("duplicate", "duplicate");
+      });
+    case "ssh_remove_key":
+      return sshRequest(1000, (s) => {
+        const key = args.key as string;
+        const left = s.state.keys.filter((k) => k.key !== key);
+        if (left.length === s.state.keys.length)
+          throw new ApiError("unknown_key", "unknown_key");
+        s.state = {
+          ...s.state,
+          keys: left,
+          enabled:
+            s.state.enabled && !(left.length === 0 && s.state.mode === "key"),
+        };
+      });
     case "t3k_open_link_again":
     case "t3k_open_site":
     case "sd_open_privacy_settings":

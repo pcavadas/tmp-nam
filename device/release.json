@@ -65,8 +65,14 @@
     "dropbear_service": {
       "source": "systemd/dropbear-nam.service",
       "target": "etc/systemd/system/dropbear-nam.service",
-      "bytes": 284,
-      "sha256": "912eeab2879050328352ec15c06117aa0f135cfd980b27cc0fbb96490cc35715"
+      "bytes": 224,
+      "sha256": "62ca8a0e4a7bde44d682dd4002a4b12267be86f2a46bce98f86aa82ef6db05ab"
+    },
+    "ssh_launcher": {
+      "source": "scripts/nam-ssh.sh",
+      "target": "usr/local/bin/nam-ssh.sh",
+      "bytes": 763,
+      "sha256": "0dd8aaf49403147576d4498df954daae791eed41919b02084732c31d6c7f5a87"
     },
     "t3k": {
       "source": "helpers/t3k_sync.py",
