@@ -422,63 +422,21 @@ SSH_STATE = SSH_DIR + "/state"
 SSH_KEYS = SSH_DIR + "/authorized_keys"
 SSH_LAUNCHER = "/usr/local/bin/nam-ssh.sh"
 SSH_SERVICE = "dropbear-nam.service"
-KEY_TYPES = {
-    "ssh-ed25519": 256,
-    "ssh-rsa": None,
-    "ecdsa-sha2-nistp256": 256,
-    "ecdsa-sha2-nistp384": 384,
-    "ecdsa-sha2-nistp521": 521,
-}
 
 
-def ssh_string(blob, pos):
-    """(bytes, next position) of an SSH wire string, or (None, pos)."""
-    if pos + 4 > len(blob):
-        return None, pos
-    n = int.from_bytes(blob[pos:pos + 4], "big")
-    end = pos + 4 + n
-    if end > len(blob):
-        return None, pos
-    return blob[pos + 4:end], end
-
-
-def parse_key(line):
-    """A public key line as a dict, or None when it isn't one."""
-    parts = line.strip().split(None, 2)
-    if len(parts) < 2 or parts[0] not in KEY_TYPES:
-        return None
-    try:
-        blob = base64.b64decode(parts[1].encode("ascii"), validate=True)
-    except Exception:
-        return None
-    kind, pos = ssh_string(blob, 0)
-    if kind is None or kind.decode("ascii", "replace") != parts[0]:
-        return None
-    bits = KEY_TYPES[parts[0]]
-    if bits is None:
-        _e, pos = ssh_string(blob, pos)
-        n, pos = ssh_string(blob, pos)
-        if not n:
-            return None
-        bits = int.from_bytes(n, "big").bit_length()
-    digest = hashlib.sha256(blob).digest()
-    fp = base64.b64encode(digest).decode("ascii").rstrip("=")
-    return {
-        "type": parts[0],
-        "bits": bits,
-        "comment": parts[2].strip() if len(parts) > 2 else "",
-        "fingerprint": "SHA256:" + fp,
-        "line": " ".join(parts),
-    }
+def key_blob(line):
+    """The base64 field of a key line, which identifies the key."""
+    parts = line.split()
+    return parts[1] if len(parts) > 1 else None
 
 
 def read_keys():
+    """The allowed key lines, as stored (the app parses them)."""
     try:
         with open(SSH_KEYS) as f:
-            lines = f.read().splitlines()
+            return [l.strip() for l in f.read().splitlines() if l.strip()]
     except OSError:
         return []
-    return [k for k in map(parse_key, lines) if k]
 
 
 def write_private(path, text):
@@ -489,7 +447,7 @@ def write_private(path, text):
 
 
 def write_keys(keys):
-    write_private(SSH_KEYS, "".join(k["line"] + "\n" for k in keys))
+    write_private(SSH_KEYS, "".join(k + "\n" for k in keys))
 
 
 def read_ssh_state():
@@ -540,9 +498,7 @@ def ssh_apply(enabled):
 
 def ssh_report(state, keys):
     emit({"supported": True, "enabled": state["enabled"],
-          "mode": state["mode"],
-          "keys": [dict((k, v) for k, v in key.items() if k != "line")
-                   for key in keys]})
+          "mode": state["mode"], "keys": keys})
 
 
 def ssh_require_card():
@@ -551,15 +507,15 @@ def ssh_require_card():
 
 
 def ssh_add(path, keys):
-    """Add the key in file `path` to `keys` unless present; the new list."""
+    """Add the key line in file `path` to `keys` unless present (same base64
+    field); the new list. The app sends only this computer's checked .pub."""
     with open(path) as f:
-        lines = [l for l in f.read().splitlines() if l.strip()]
-    key = parse_key(lines[0]) if len(lines) == 1 else None
-    if not key:
+        lines = [" ".join(l.split()) for l in f.read().splitlines() if l.strip()]
+    if len(lines) != 1 or not key_blob(lines[0]) or "PRIVATE" in lines[0]:
         raise SystemExit("invalid_key")
-    if any(k["fingerprint"] == key["fingerprint"] for k in keys):
+    if any(key_blob(k) == key_blob(lines[0]) for k in keys):
         return keys, False
-    return keys + [key], True
+    return keys + lines, True
 
 
 def cmd_ssh_state(_args):
@@ -602,11 +558,11 @@ def cmd_ssh_add(args):
 
 
 def cmd_ssh_remove(args):
-    """ssh-remove <fingerprint>: removing the last key in Key only turns SSH
+    """ssh-remove <base64 key>: removing the last key in Key only turns SSH
     off, now and at every start."""
     ssh_require_card()
     keys = read_keys()
-    left = [k for k in keys if k["fingerprint"] != args[0]]
+    left = [k for k in keys if key_blob(k) != args[0]]
     if len(left) == len(keys):
         raise SystemExit("unknown_key")
     write_keys(left)

@@ -34,9 +34,9 @@ SSH is **off by default** and is switched in **TMP NAM → Settings → Wi-Fi �
 
 - **Off** (`enabled=0`, or no file): Dropbear doesn't run.
 - **Key only** (`mode=key`): only allowed public keys log in; Dropbear runs with `-s`, so password logins are refused, including root's empty one. Turning SSH on starts here and allows this computer: the app reads `~/.ssh/id_ed25519.pub`, creating it with `ssh-keygen` when missing; the private key is never read.
-- **No security** (`mode=none`): anyone on the network logs in as root with no key or password (Dropbear `-B`; stock root has an empty password). The app asks for confirmation and warns while it is on. Useful for an SSH app on a phone, whose key is otherwise added with **Add Another Computer…** (paste its public key).
+- **No security** (`mode=none`): anyone on the network logs in as root with no key or password (Dropbear `-B`; stock root has an empty password). The app asks for confirmation and warns while it is on. Useful for an SSH app on a phone.
 
-Allowed keys live in `/data/nam/ssh/authorized_keys` (root's `~/.ssh/authorized_keys` on the card points there), so they survive new cards. Removing the last allowed computer in Key only turns SSH off. A factory reset that clears `/data` removes the setting, the keys and the host key: SSH is then off until it is turned on again, and clients see a new host key.
+Allowed keys live in `/data/nam/ssh/authorized_keys` (root's `~/.ssh/authorized_keys` on the card points there), so they survive new cards. To allow another computer in Key only, log in from this one and append that computer's public key line to the file; the app lists every key it can read and can remove it. Removing the last allowed computer in Key only turns SSH off. A factory reset that clears `/data` removes the setting, the keys and the host key: SSH is then off until it is turned on again, and clients see a new host key.
 
 A card made before this switch runs SSH with a blank root password at every boot; the app shows it as too old and offers to create a new card.
 

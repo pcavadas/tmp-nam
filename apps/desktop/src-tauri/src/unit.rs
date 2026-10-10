@@ -329,7 +329,7 @@ pub trait Unit: Send {
     ) -> Result<SshState, String>;
     fn ssh_add(&mut self, key: &str) -> Result<SshState, String>;
     /// Removing the last key in Key only turns SSH off.
-    fn ssh_remove(&mut self, fingerprint: &str) -> Result<SshState, String>;
+    fn ssh_remove(&mut self, key: &str) -> Result<SshState, String>;
 }
 
 /// Why Wi-Fi settings can't reach the engine: no permission on the HID device (Linux
@@ -1092,8 +1092,8 @@ impl Unit for ConsoleUnit {
         self.ssh_helper("ssh-add", &[SSH_KEY_PATH.into()])
     }
 
-    fn ssh_remove(&mut self, fingerprint: &str) -> Result<SshState, String> {
-        self.ssh_helper("ssh-remove", &[fingerprint.into()])
+    fn ssh_remove(&mut self, key: &str) -> Result<SshState, String> {
+        self.ssh_helper("ssh-remove", &[key.into()])
     }
 }
 
@@ -1105,7 +1105,9 @@ impl ConsoleUnit {
     /// (`card_too_old`, `duplicate`, `invalid_key`, `no_keys`, `not_applied`, `unknown_key`).
     fn ssh_helper(&mut self, cmd: &str, args: &[String]) -> Result<SshState, String> {
         let v = self.helper(cmd, args, 60)?;
-        serde_json::from_value(v).map_err(|e| format!("bad SSH state: {e}"))
+        serde_json::from_value::<ssh::UnitReport>(v)
+            .map(SshState::from)
+            .map_err(|e| format!("bad SSH state: {e}"))
     }
 }
 
@@ -1156,21 +1158,11 @@ impl SimSsh {
     }
 
     fn add(&mut self, line: &str) -> Result<bool, String> {
-        let key = ssh::parse_key_text(line).map_err(|_| "invalid_key".to_string())?;
-        if self
-            .state
-            .keys
-            .iter()
-            .any(|k| k.fingerprint == key.fingerprint)
-        {
+        let key = ssh::parse_key(line).ok_or("invalid_key")?;
+        if self.state.keys.iter().any(|k| k.key == key.key) {
             return Ok(false);
         }
-        self.state.keys.push(ssh::AuthorizedKey {
-            key_type: key.key_type,
-            bits: key.bits,
-            comment: key.comment,
-            fingerprint: key.fingerprint,
-        });
+        self.state.keys.push(key);
         Ok(true)
     }
 
@@ -1192,10 +1184,10 @@ impl SimSsh {
         Ok(self.state.clone())
     }
 
-    fn remove(&mut self, fingerprint: &str) -> Result<SshState, String> {
+    fn remove(&mut self, key: &str) -> Result<SshState, String> {
         self.require_card()?;
         let before = self.state.keys.len();
-        self.state.keys.retain(|k| k.fingerprint != fingerprint);
+        self.state.keys.retain(|k| k.key != key);
         if self.state.keys.len() == before {
             return Err("unknown_key".into());
         }
@@ -1579,9 +1571,9 @@ impl Unit for SimUnit {
         })
     }
 
-    fn ssh_remove(&mut self, fingerprint: &str) -> Result<SshState, String> {
+    fn ssh_remove(&mut self, key: &str) -> Result<SshState, String> {
         std::thread::sleep(Duration::from_millis(800));
-        Self::with(|s| s.ssh.remove(fingerprint))
+        Self::with(|s| s.ssh.remove(key))
     }
 }
 
@@ -1781,7 +1773,8 @@ mod tests {
     use super::*;
 
     const ED25519: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILi8KzRrtyJmUSNagtW73E1WgHF2YdXmSwVpuHnQjg6t test@ed25519";
-    const ED25519_FP: &str = "SHA256:gnW2c+6N0FRetAkbDojHSGQN1p60SPD0Pr6927fmQ58";
+    const ED25519_KEY: &str =
+        "AAAAC3NzaC1lZDI1NTE5AAAAILi8KzRrtyJmUSNagtW73E1WgHF2YdXmSwVpuHnQjg6t";
 
     #[test]
     fn sim_ssh_follows_the_card_rules() {
@@ -1815,9 +1808,9 @@ mod tests {
         assert_eq!((off.enabled, off.mode), (false, SshMode::None));
         // In Key only, removing the last key turns SSH off.
         ssh.set(true, Some(SshMode::Key), None).unwrap();
-        let off = ssh.remove(ED25519_FP).unwrap();
+        let off = ssh.remove(ED25519_KEY).unwrap();
         assert!(!off.enabled && off.keys.is_empty());
-        assert_eq!(ssh.remove(ED25519_FP), Err("unknown_key".into()));
+        assert_eq!(ssh.remove(ED25519_KEY), Err("unknown_key".into()));
         // A card too old refuses every change.
         ssh.state.supported = false;
         assert_eq!(ssh.set(false, None, None), Err("card_too_old".into()));

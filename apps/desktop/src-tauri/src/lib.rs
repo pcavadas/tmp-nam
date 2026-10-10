@@ -651,38 +651,21 @@ async fn ssh_set(
     Ok(ssh_view(ssh, key).await)
 }
 
-/// One pasted public key, checked for the Add Another Computer preview.
+/// Allow this computer (its key is created if missing).
 #[tauri::command]
-fn ssh_check_key(text: String) -> Result<ssh::PublicKey, ApiError> {
-    ssh::parse_key_text(&text).map_err(|p| ApiError {
-        code: p.code(),
-        message: p.code().into(),
-    })
-}
-
-/// Allow a pasted key, or this computer's with no `text`.
-#[tauri::command]
-async fn ssh_add_key(
-    state: State<'_, AppState>,
-    text: Option<String>,
-) -> Result<SshView, ApiError> {
-    let (key, mine) = match text {
-        Some(text) => (ssh_check_key(text)?, false),
-        None => (this_computer_key().await?, true),
-    };
+async fn ssh_add_this_computer(state: State<'_, AppState>) -> Result<SshView, ApiError> {
+    let key = this_computer_key().await?;
     log::info!("ssh add {}", key.fingerprint);
     let line = key.line.clone();
     let ssh = ssh_call(state.inner(), move |u| u.ssh_add(&line)).await?;
-    Ok(ssh_view(ssh, mine.then_some(key)).await)
+    Ok(ssh_view(ssh, Some(key)).await)
 }
 
+/// Remove an allowed key, by its base64 field (`PublicKey::key`).
 #[tauri::command]
-async fn ssh_remove_key(
-    state: State<'_, AppState>,
-    fingerprint: String,
-) -> Result<SshView, ApiError> {
-    log::info!("ssh remove {fingerprint}");
-    let ssh = ssh_call(state.inner(), move |u| u.ssh_remove(&fingerprint)).await?;
+async fn ssh_remove_key(state: State<'_, AppState>, key: String) -> Result<SshView, ApiError> {
+    log::info!("ssh remove a key");
+    let ssh = ssh_call(state.inner(), move |u| u.ssh_remove(&key)).await?;
     Ok(ssh_view(ssh, None).await)
 }
 
@@ -1009,8 +992,7 @@ pub fn run() {
             ssh_state,
             ssh_create_key,
             ssh_set,
-            ssh_check_key,
-            ssh_add_key,
+            ssh_add_this_computer,
             ssh_remove_key,
             settings_get,
             settings_set,

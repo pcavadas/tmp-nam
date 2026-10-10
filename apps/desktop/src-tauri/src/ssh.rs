@@ -2,8 +2,8 @@
 //! unit reports. The unit side is `unit_helper.py` (`ssh-*` commands) and the card's
 //! `nam-ssh.sh`, which starts Dropbear at every boot as `/data/nam/ssh/state` says:
 //! off, key only (`-s`: no password logins at all) or no security (`-B`: root with the
-//! stock empty password). Public keys aren't secret, so they travel over the console;
-//! private keys are refused and never stored.
+//! stock empty password). The unit stores whole `authorized_keys` lines; this module
+//! is the only place that parses them. Only this computer's public key is ever sent.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -31,27 +31,38 @@ impl SshMode {
     }
 }
 
-/// A key the unit allows, as it reports it (never the key itself).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AuthorizedKey {
-    #[serde(rename = "type")]
-    pub key_type: String,
-    pub bits: Option<u32>,
-    pub comment: String,
-    pub fingerprint: String,
-}
-
 /// What the unit reports. `supported: false` is a card made before SSH access could
 /// be switched: its SSH is always on, with no password.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SshState {
     pub supported: bool,
-    #[serde(default)]
     pub enabled: bool,
-    #[serde(default)]
     pub mode: SshMode,
+    /// The allowed keys the app can read (other lines stay on the unit untouched).
+    pub keys: Vec<PublicKey>,
+}
+
+/// The helper's answer: the same, with the raw key lines.
+#[derive(Deserialize)]
+pub struct UnitReport {
+    supported: bool,
     #[serde(default)]
-    pub keys: Vec<AuthorizedKey>,
+    enabled: bool,
+    #[serde(default)]
+    mode: SshMode,
+    #[serde(default)]
+    keys: Vec<String>,
+}
+
+impl From<UnitReport> for SshState {
+    fn from(r: UnitReport) -> Self {
+        SshState {
+            supported: r.supported,
+            enabled: r.enabled,
+            mode: r.mode,
+            keys: r.keys.iter().filter_map(|l| parse_key(l)).collect(),
+        }
+    }
 }
 
 /// A parsed public-key line.
@@ -62,27 +73,11 @@ pub struct PublicKey {
     pub bits: Option<u32>,
     pub comment: String,
     pub fingerprint: String,
+    /// The base64 field, which identifies the key on the unit (public).
+    pub key: String,
     /// The normalized line sent to the unit.
     #[serde(skip)]
     pub line: String,
-}
-
-/// Why pasted text isn't one public key.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KeyProblem {
-    NotAKey,
-    SeveralLines,
-    Private,
-}
-
-impl KeyProblem {
-    pub fn code(self) -> &'static str {
-        match self {
-            KeyProblem::NotAKey => "not_a_key",
-            KeyProblem::SeveralLines => "several_lines",
-            KeyProblem::Private => "private_key",
-        }
-    }
 }
 
 const KEY_TYPES: [(&str, Option<u32>); 5] = [
@@ -92,11 +87,6 @@ const KEY_TYPES: [(&str, Option<u32>); 5] = [
     ("ecdsa-sha2-nistp384", Some(384)),
     ("ecdsa-sha2-nistp521", Some(521)),
 ];
-
-/// PEM, OpenSSH and PuTTY private keys.
-pub fn is_private_key(text: &str) -> bool {
-    text.contains("PRIVATE KEY-----") || text.contains("PuTTY-User-Key-File")
-}
 
 /// An SSH wire string at `pos`: its bytes and the position after it.
 fn wire_string(blob: &[u8], pos: usize) -> Option<(&[u8], usize)> {
@@ -114,7 +104,8 @@ pub fn fingerprint(blob: &[u8]) -> String {
     )
 }
 
-fn parse_line(line: &str) -> Option<PublicKey> {
+/// One `authorized_keys` line, or `None` when it isn't a supported public key.
+pub fn parse_key(line: &str) -> Option<PublicKey> {
     let mut parts = line.trim().splitn(3, char::is_whitespace);
     let kind = parts.next()?;
     let data = parts.next()?;
@@ -146,23 +137,10 @@ fn parse_line(line: &str) -> Option<PublicKey> {
         key_type: kind.to_string(),
         bits,
         fingerprint: fingerprint(&blob),
+        key: data.to_string(),
         comment,
         line,
     })
-}
-
-/// One public-key line, as pasted (surrounding blank lines are fine).
-pub fn parse_key_text(text: &str) -> Result<PublicKey, KeyProblem> {
-    if is_private_key(text) {
-        return Err(KeyProblem::Private);
-    }
-    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
-    match lines.as_slice() {
-        [line] => parse_line(line).ok_or(KeyProblem::NotAKey),
-        [] => Err(KeyProblem::NotAKey),
-        _ if lines.iter().all(|l| parse_line(l).is_some()) => Err(KeyProblem::SeveralLines),
-        _ => Err(KeyProblem::NotAKey),
-    }
 }
 
 // ─── this computer's key ────────────────────────────────────────────────────────────
@@ -229,9 +207,9 @@ fn key_in(dir: &Path, create: bool) -> Result<Option<PublicKey>, String> {
     }
     let text =
         std::fs::read_to_string(&public).map_err(|e| format!("{}: {e}", public.display()))?;
-    parse_key_text(&text)
+    parse_key(&text)
         .map(Some)
-        .map_err(|_| format!("{} isn't a public key", public.display()))
+        .ok_or_else(|| format!("{} isn't a public key", public.display()))
 }
 
 #[cfg(test)]
@@ -271,21 +249,17 @@ mod tests {
     #[test]
     fn parses_every_supported_type_like_ssh_keygen() {
         for (line, bits, fp) in KEYS {
-            let key = parse_key_text(&format!("\n  {line}  \n")).unwrap();
+            let key = parse_key(&format!("  {line}  ")).unwrap();
             assert_eq!((key.bits, key.fingerprint.as_str()), (Some(bits), fp));
             assert!(key.comment.starts_with("test@"));
             assert_eq!(key.line, line);
+            assert_eq!(key.key, line.split(' ').nth(1).unwrap());
         }
     }
 
     #[test]
-    fn explains_what_is_wrong_with_pasted_text() {
-        let (ed, _, _) = KEYS[0];
-        let blob = ed.split(' ').nth(1).unwrap();
-        assert_eq!(
-            parse_key_text(&format!("{ed}\n{}", KEYS[1].0)),
-            Err(KeyProblem::SeveralLines)
-        );
+    fn refuses_what_is_not_a_public_key() {
+        let blob = KEYS[0].0.split(' ').nth(1).unwrap();
         for bad in [
             "",
             "hello",
@@ -293,16 +267,9 @@ mod tests {
             &format!("ssh-dss {blob}"),
             &format!("ssh-rsa {blob}"), // embedded type is ed25519
             "ssh-ed25519 not base64!",
+            "-----BEGIN OPENSSH PRIVATE KEY-----",
         ] {
-            assert_eq!(parse_key_text(bad), Err(KeyProblem::NotAKey), "{bad}");
-        }
-        for private in [
-            "-----BEGIN OPENSSH PRIVATE KEY-----\nb3Blbg==\n-----END OPENSSH PRIVATE KEY-----",
-            "-----BEGIN RSA PRIVATE KEY-----\nMIIE\n",
-            "-----BEGIN PRIVATE KEY-----",
-            "PuTTY-User-Key-File-3: ssh-ed25519\nEncryption: none",
-        ] {
-            assert_eq!(parse_key_text(private), Err(KeyProblem::Private));
+            assert_eq!(parse_key(bad), None, "{bad}");
         }
     }
 
@@ -328,14 +295,16 @@ mod tests {
 
     #[test]
     fn reads_the_units_report() {
-        let old: SshState = serde_json::from_str(r#"{"supported": false}"#).unwrap();
+        let old =
+            SshState::from(serde_json::from_str::<UnitReport>(r#"{"supported": false}"#).unwrap());
         assert!(!old.supported && !old.enabled && old.keys.is_empty());
-        let on: SshState = serde_json::from_str(
-            r#"{"supported": true, "enabled": true, "mode": "none",
-                "keys": [{"type": "ssh-ed25519", "bits": 256, "comment": "a@b",
-                          "fingerprint": "SHA256:x"}]}"#,
-        )
-        .unwrap();
+        let report = format!(
+            r#"{{"supported": true, "enabled": true, "mode": "none",
+                 "keys": ["{}", "not a key the app reads"]}}"#,
+            KEYS[0].0
+        );
+        let on = SshState::from(serde_json::from_str::<UnitReport>(&report).unwrap());
         assert_eq!((on.mode, on.keys.len()), (SshMode::None, 1));
+        assert_eq!(on.keys[0].fingerprint, KEYS[0].2);
     }
 }

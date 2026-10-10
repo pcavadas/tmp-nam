@@ -420,8 +420,6 @@ interface MockSsh {
   state: SshState;
   /** This computer's key, once "created". */
   thisComputer: PublicKey | null;
-  /** Full lines of allowed keys, by fingerprint. */
-  lines: Map<string, string>;
 }
 
 let ssh: MockSsh | null = null;
@@ -434,35 +432,17 @@ const mockSsh = (): MockSsh =>
       keys: [],
     },
     thisComputer: null,
-    lines: new Map(),
   });
 
-const KEY_LINE =
-  /^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(?:256|384|521)) ([A-Za-z0-9+/]{20,}={0,2})(?: (.*))?$/;
+const MOCK_MAC_KEY: PublicKey = {
+  type: "ssh-ed25519",
+  bits: 256,
+  comment: "me@This-Mac",
+  fingerprint: "SHA256:MockThisComputerKeyForTheBrowserOnly0000000",
+  key: "AAAAC3NzaC1lZDI1NTE5AAAAIMockThisComputerKeyForTheBrowserOnly",
+};
 
-/** Mirrors `ssh::parse_key_text` closely enough for the mock (fake fingerprint). */
-function mockParseKey(text: string): PublicKey {
-  if (/PRIVATE KEY-----|PuTTY-User-Key-File/.test(text))
-    throw new ApiError("private_key", "private_key");
-  const lines = text.split("\n").filter((l) => l.trim());
-  if (lines.length > 1 && lines.every((l) => KEY_LINE.test(l.trim())))
-    throw new ApiError("several_lines", "several_lines");
-  const m = lines.length === 1 ? KEY_LINE.exec((lines[0] ?? "").trim()) : null;
-  const type = m?.[1];
-  const blob = m?.[2];
-  if (!type || !blob) throw new ApiError("not_a_key", "not_a_key");
-  let h = 0;
-  for (const c of blob) h = (h * 31 + c.charCodeAt(0)) >>> 0;
-  const fp = `SHA256:${btoa(String(h).repeat(5)).replace(/=+$/, "").slice(0, 43)}`;
-  const curve = Number(/\d+$/.exec(type)?.[0] ?? 256);
-  const bits = type === "ssh-rsa" ? 2048 : type === "ssh-ed25519" ? 256 : curve;
-  return { type, bits, comment: m[3] ?? "", fingerprint: fp };
-}
-
-const MOCK_MAC_KEY =
-  "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMockThisComputerKeyForTheBrowserOnly me@This-Mac";
-
-/** Runs `f` on the card, answering like `ssh_set`/`ssh_add_key`/`ssh_remove_key`. */
+/** Runs `f` on the card, answering like `ssh_set`/`ssh_add_this_computer`/`ssh_remove_key`. */
 async function sshRequest(
   ms: number,
   f: (s: MockSsh) => void,
@@ -478,17 +458,11 @@ async function sshRequest(
   return { ssh: s.state, this_computer: s.thisComputer };
 }
 
-/** This computer's key, "created" when missing. */
-function mockThisComputer(s: MockSsh): string {
-  s.thisComputer ??= mockParseKey(MOCK_MAC_KEY);
-  return MOCK_MAC_KEY;
-}
-
-function mockAllow(s: MockSsh, line: string): boolean {
-  const key = mockParseKey(line);
-  if (s.lines.has(key.fingerprint)) return false;
-  s.lines.set(key.fingerprint, line);
-  s.state.keys = [...s.state.keys, key];
+/** Allow this computer ("created" when missing); false when it already was. */
+function mockAllowThisComputer(s: MockSsh): boolean {
+  s.thisComputer ??= MOCK_MAC_KEY;
+  if (s.state.keys.some((k) => k.key === MOCK_MAC_KEY.key)) return false;
+  s.state.keys = [...s.state.keys, MOCK_MAC_KEY];
   return true;
 }
 
@@ -772,34 +746,35 @@ export async function mockInvoke(
           "~/.ssh/id_ed25519.pub: Permission denied",
         );
       const s = mockSsh();
-      s.thisComputer ??= mockParseKey(MOCK_MAC_KEY);
+      s.thisComputer ??= MOCK_MAC_KEY;
       return s.thisComputer;
     }
     case "ssh_set":
       return sshRequest(1200, (s) => {
         const enabled = args.enabled as boolean;
         const mode = (args.mode as SshMode | null) ?? s.state.mode;
-        if (enabled && mode === "key") mockAllow(s, mockThisComputer(s));
+        if (enabled && mode === "key") mockAllowThisComputer(s);
         if (enabled && mode === "key" && s.state.keys.length === 0)
           throw new ApiError("no_keys", "no_keys");
         s.state = { ...s.state, enabled, mode };
       });
-    case "ssh_check_key":
-      return mockParseKey(args.text as string);
-    case "ssh_add_key":
+    case "ssh_add_this_computer":
       return sshRequest(1000, (s) => {
-        const text = args.text as string | null;
-        if (!mockAllow(s, text ?? mockThisComputer(s)))
+        if (!mockAllowThisComputer(s))
           throw new ApiError("duplicate", "duplicate");
       });
     case "ssh_remove_key":
       return sshRequest(1000, (s) => {
-        const fp = args.fingerprint as string;
-        if (!s.lines.delete(fp))
+        const key = args.key as string;
+        const left = s.state.keys.filter((k) => k.key !== key);
+        if (left.length === s.state.keys.length)
           throw new ApiError("unknown_key", "unknown_key");
-        s.state.keys = s.state.keys.filter((k) => k.fingerprint !== fp);
-        if (s.state.keys.length === 0 && s.state.mode === "key")
-          s.state = { ...s.state, enabled: false };
+        s.state = {
+          ...s.state,
+          keys: left,
+          enabled:
+            s.state.enabled && !(left.length === 0 && s.state.mode === "key"),
+        };
       });
     case "t3k_open_link_again":
     case "t3k_open_site":

@@ -726,9 +726,6 @@ describe("Settings › Wi-Fi", () => {
 describe("Settings › Wi-Fi › SSH access", () => {
   beforeEach(resetMockWifi);
 
-  const PHONE =
-    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILi8KzRrtyJmUSNagtW73E1WgHF2YdXmSwVpuHnQjg6t me@phone";
-
   async function openSsh(query = "/") {
     window.history.replaceState(null, "", query);
     resetMockWifi();
@@ -791,38 +788,6 @@ describe("Settings › Wi-Fi › SSH access", () => {
     expect(
       within(card).queryByRole("button", { name: "Add This Mac" }),
     ).toBeNull();
-  });
-
-  it("refuses a pasted private key and adds a public one", async () => {
-    const card = await openSsh();
-    await turnOn(card);
-    await userEvent.click(
-      within(card).getByRole("button", { name: "Add Another Computer…" }),
-    );
-    const sheet = screen.getByRole("dialog", { name: "Add another computer" });
-    const field = within(sheet).getByLabelText("Public key");
-    await userEvent.click(field);
-    await userEvent.paste(
-      "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXk=\n-----END OPENSSH PRIVATE KEY-----",
-    );
-    expect(
-      within(sheet).getByText("That was a private key, so it wasn't kept"),
-    ).toBeInTheDocument();
-    expect(within(sheet).getByLabelText("Public key")).toHaveValue("");
-    expect(
-      within(sheet).getByRole("button", { name: "Add Computer" }),
-    ).toBeDisabled();
-    await userEvent.click(within(sheet).getByLabelText("Public key"));
-    await userEvent.paste(PHONE);
-    expect(await within(sheet).findByText("Valid key")).toBeInTheDocument();
-    await userEvent.click(
-      within(sheet).getByRole("button", { name: "Add Computer" }),
-    );
-    expect(
-      await screen.findByText("me@phone can log in", undefined, wait),
-    ).toBeInTheDocument();
-    const list = within(card).getByRole("list", { name: "Allowed computers" });
-    expect(within(list).getByText("me@phone")).toBeInTheDocument();
   });
 
   it("removing the last computer turns SSH access off", async () => {

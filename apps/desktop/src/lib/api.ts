@@ -278,6 +278,8 @@ export interface AuthorizedKey {
   comment: string;
   /** "SHA256:…", as `ssh-keygen -l` prints it. */
   fingerprint: string;
+  /** The key's base64 field (public): what Remove sends. */
+  key: string;
 }
 
 export interface SshState {
@@ -288,7 +290,7 @@ export interface SshState {
   keys: AuthorizedKey[];
 }
 
-/** A parsed public key (the key itself stays in the backend). */
+/** A parsed public key. */
 export type PublicKey = AuthorizedKey;
 
 export interface SshView {
@@ -387,13 +389,11 @@ export const api = {
    * also allows this computer. */
   sshSet: (enabled: boolean, mode: SshMode | null) =>
     call<SshView>("ssh_set", { enabled, mode }),
-  /** Check one pasted public key; never pass text that looks like a private key. */
-  sshCheckKey: (text: string) => call<PublicKey>("ssh_check_key", { text }),
-  /** Allow a pasted key, or this computer's with null. */
-  sshAddKey: (text: string | null) => call<SshView>("ssh_add_key", { text }),
+  /** Allow this computer (its key is created if missing). */
+  sshAddThisComputer: () => call<SshView>("ssh_add_this_computer"),
   /** Removing the last key in Key only turns SSH off. */
-  sshRemoveKey: (fingerprint: string) =>
-    call<SshView>("ssh_remove_key", { fingerprint }),
+  sshRemoveKey: (k: AuthorizedKey) =>
+    call<SshView>("ssh_remove_key", { key: k.key }),
 
   settingsGet: () => call<Settings>("settings_get"),
   settingsSet: (settings: Settings) => call<null>("settings_set", { settings }),

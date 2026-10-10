@@ -364,36 +364,16 @@ class PlayerOptionsTests(unittest.TestCase):
                     self.assert_rejected_without_write()
 
 
-# Throwaway public keys and the fingerprints `ssh-keygen -l` prints for them.
-KEYS = {
-    "ed25519": (
-        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILi8KzRrtyJmUSNagtW73E1WgHF2YdXmSwVpuHnQjg6t "
-        "test@ed25519",
-        256, "SHA256:gnW2c+6N0FRetAkbDojHSGQN1p60SPD0Pr6927fmQ58"),
-    "rsa": (
-        "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDofZY6iL6EyvMEN8ro15zdsRPMcISlY7le01PZ52gdvLm"
-        "D9S3WU3gHWuxH+qYfQdLZjjMAhmsWSX8tu5aoCRTZr4rok3nr1OfuqlQMID19wEM6YMYTbki+UescGFe16b"
-        "z0LBtmSnDFAF/piXMADfNG34eyVbssyJ0DxWQ0zHroZLgo22YxyWj9ORgkinH2wme6JuWAltWZR4pfmVUNm"
-        "eEaJQX/HvnTj/FARINCmpFzBZqkpC/LHNbZGBmxCAMZtZQbrWwo/8+LXgB4o0IK8qGKhkPoYDhXd5AtCvAc"
-        "jtGRDfhKhDpG6NoaTFZIfqK7UaHV79ho8m1TinWHaLPGku/F test@rsa",
-        2048, "SHA256:SpD9/hvo2c053TtXZAuy4SYBY+SnnW9yHPlC4g6J4lY"),
-    "ecdsa256": (
-        "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBDenZRcqGdj"
-        "LSIZuWCtazk44QdTa3uKbMzi4m58hYn0YTvZCG1UJAMHr1pdI08bzhic7WqnAZLb/gIdjBFEwie0= "
-        "test@ecdsa256",
-        256, "SHA256:aHnvOzLfJynV+4avLS/KACuOSGC3LsCGYUmBwcV9kj0"),
-    "ecdsa384": (
-        "ecdsa-sha2-nistp384 AAAAE2VjZHNhLXNoYTItbmlzdHAzODQAAAAIbmlzdHAzODQAAABhBGLJ06uOIFJ"
-        "u7SoxTODJYmkilTvRLjBlFygOk7Gza1EfIUk2IT9dbwf9ySZQJDNnLVUIaZBTSWcqO2OaYqYvBXRjVc8jBr"
-        "mOsG5NXl+L/bGTR7LbfDZVcT9TY5QiHQUe5Q== test@ecdsa384",
-        384, "SHA256:8aGm1gOIsMhl2vtUFb61W/3DsPtnl5kA0YfC+yQ0m74"),
-    "ecdsa521": (
-        "ecdsa-sha2-nistp521 AAAAE2VjZHNhLXNoYTItbmlzdHA1MjEAAAAIbmlzdHA1MjEAAACFBAHQG9j4GL1"
-        "oPubuw2Drk2K9OTI//6gSWYP79VRe/X1x4SN6vr820aSsGxVblwq+DGha+S8tRByhC9rk6SjBv3Fu4wH3TO"
-        "5Ruk9bccAz6SGeWZG3STTelCtjoBnkTTJ1MFqDj+dHWht1XkZvGXLbZ+7dNFTJi5O6bgXHGaNNENXhlLshT"
-        "Q== test@ecdsa521",
-        521, "SHA256:7I/ZL18u6Hd9zi50MF5CYiZEyXl5es3Q6RAY7dMGbQs"),
-}
+# Throwaway public keys (the app parses them; the helper stores whole lines).
+ED25519 = ("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILi8KzRrtyJmUSNagtW73E1WgHF2YdXmSwVpuHnQjg6t "
+           "test@ed25519")
+ECDSA = ("ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBDenZRcqGdj"
+         "LSIZuWCtazk44QdTa3uKbMzi4m58hYn0YTvZCG1UJAMHr1pdI08bzhic7WqnAZLb/gIdjBFEwie0= "
+         "test@ecdsa256")
+
+
+def blob(line):
+    return line.split()[1]
 
 
 class SshAccessTests(unittest.TestCase):
@@ -438,21 +418,6 @@ class SshAccessTests(unittest.TestCase):
             self.helper.COMMANDS[name](args)
         return json.loads(output.getvalue())
 
-    def test_parses_every_supported_key_type(self):
-        for line, bits, fingerprint in KEYS.values():
-            key = self.helper.parse_key(line)
-            self.assertEqual((key["bits"], key["fingerprint"]), (bits, fingerprint))
-            self.assertTrue(key["comment"].startswith("test@"))
-
-    def test_rejects_what_is_not_a_public_key(self):
-        line = KEYS["ed25519"][0]
-        kind, blob, _ = line.split(" ")
-        for bad in ("", "hello", kind, "ssh-dss " + blob,
-                    "ssh-rsa " + blob,  # embedded type is ed25519
-                    kind + " not-base64!",
-                    "-----BEGIN OPENSSH PRIVATE KEY-----"):
-            self.assertIsNone(self.helper.parse_key(bad), bad)
-
     def test_off_by_default_and_card_too_old(self):
         self.assertEqual(self.run_cmd("ssh-state", []),
                          {"supported": True, "enabled": False, "mode": "key",
@@ -460,20 +425,20 @@ class SshAccessTests(unittest.TestCase):
         os.remove(self.helper.SSH_LAUNCHER)
         self.assertEqual(self.run_cmd("ssh-state", []), {"supported": False})
         with self.assertRaises(SystemExit) as e:
-            self.run_cmd("ssh-set", ["1", "key", self.key_file(KEYS["rsa"][0])])
+            self.run_cmd("ssh-set", ["1", "key", self.key_file(ED25519)])
         self.assertEqual(str(e.exception), "card_too_old")
 
     def test_enable_installs_the_key_privately_and_starts(self):
-        state = self.run_cmd("ssh-set", ["1", "key", self.key_file(KEYS["ed25519"][0])])
+        # Extra spaces are normalized.
+        state = self.run_cmd("ssh-set", ["1", "key", self.key_file("  " + ED25519.replace(" ", "  "))])
         self.assertEqual((state["enabled"], state["mode"], self.running),
                          (True, "key", True))
-        self.assertEqual([k["fingerprint"] for k in state["keys"]], [KEYS["ed25519"][2]])
-        self.assertNotIn("line", state["keys"][0])
+        self.assertEqual(state["keys"], [ED25519])
         self.assertEqual(os.stat(self.helper.SSH_KEYS).st_mode & 0o777, 0o600)
         self.assertEqual(os.stat(self.helper.SSH_DIR).st_mode & 0o777, 0o700)
         self.assertEqual(Path(self.helper.SSH_STATE).read_text(), "enabled=1\nmode=key\n")
         # Enabling again with the same key doesn't duplicate it.
-        state = self.run_cmd("ssh-set", ["1", "key", self.key_file(KEYS["ed25519"][0])])
+        state = self.run_cmd("ssh-set", ["1", "key", self.key_file(ED25519)])
         self.assertEqual(len(state["keys"]), 1)
 
     def test_key_only_needs_a_key(self):
@@ -506,10 +471,12 @@ class SshAccessTests(unittest.TestCase):
         self.assertEqual(str(e.exception), "not_applied")
 
     def test_add_rejects_duplicates_several_lines_and_private_keys(self):
-        self.run_cmd("ssh-add", [self.key_file(KEYS["rsa"][0])])
+        self.run_cmd("ssh-add", [self.key_file(ED25519)])
         for text, error in (
-            (KEYS["rsa"][0], "duplicate"),
-            (KEYS["ed25519"][0] + "\n" + KEYS["ecdsa256"][0], "invalid_key"),
+            # The same key under another comment is a duplicate.
+            (ED25519.replace("test@ed25519", "other"), "duplicate"),
+            (ED25519 + "\n" + ECDSA, "invalid_key"),
+            ("hello", "invalid_key"),
             ("-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaA==\n", "invalid_key"),
         ):
             with self.assertRaises(SystemExit) as e:
@@ -520,15 +487,15 @@ class SshAccessTests(unittest.TestCase):
         self.assertEqual(self.restarts, [])
 
     def test_removing_the_last_key_turns_key_only_off(self):
-        self.run_cmd("ssh-set", ["1", "key", self.key_file(KEYS["ed25519"][0])])
-        self.run_cmd("ssh-add", [self.key_file(KEYS["ecdsa384"][0])])
-        state = self.run_cmd("ssh-remove", [KEYS["ed25519"][2]])
-        self.assertTrue(state["enabled"])
-        state = self.run_cmd("ssh-remove", [KEYS["ecdsa384"][2]])
+        self.run_cmd("ssh-set", ["1", "key", self.key_file(ED25519)])
+        self.run_cmd("ssh-add", [self.key_file(ECDSA)])
+        state = self.run_cmd("ssh-remove", [blob(ED25519)])
+        self.assertEqual((state["enabled"], state["keys"]), (True, [ECDSA]))
+        state = self.run_cmd("ssh-remove", [blob(ECDSA)])
         self.assertEqual((state["enabled"], self.running, state["keys"]),
                          (False, False, []))
         with self.assertRaises(SystemExit) as e:
-            self.run_cmd("ssh-remove", [KEYS["ecdsa384"][2]])
+            self.run_cmd("ssh-remove", [blob(ECDSA)])
         self.assertEqual(str(e.exception), "unknown_key")
 
 

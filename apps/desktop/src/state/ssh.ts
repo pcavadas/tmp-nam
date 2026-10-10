@@ -20,11 +20,6 @@ import { useActivity } from "./activity";
 
 // ── Rules ────────────────────────────────────────────────────────────────────
 
-/** PEM, OpenSSH and PuTTY private keys: never kept, sent or logged. */
-export function isPrivateKey(text: string): boolean {
-  return /PRIVATE KEY-----|PuTTY-User-Key-File/.test(text);
-}
-
 /** "SHA256:q3Zt…X9eK"; the full fingerprint goes in the tooltip. */
 export function shortFingerprint(fp: string): string {
   const body = fp.replace(/^SHA256:/, "");
@@ -49,18 +44,6 @@ export function orderedKeys(
 ): AuthorizedKey[] {
   const mine = keys.filter((k) => k.fingerprint === thisComputer?.fingerprint);
   return [...mine, ...keys.filter((k) => !mine.includes(k))];
-}
-
-/** Why pasted text can't be added, from `ssh_check_key`'s code. */
-export function keyProblem(code: string): string {
-  switch (code) {
-    case "several_lines":
-      return "Paste one key at a time: one line, starting with ssh-ed25519, ssh-rsa or ecdsa-sha2-.";
-    case "duplicate":
-      return "This computer can already log in.";
-    default:
-      return "This isn't a public key. Paste the whole line, starting with ssh-ed25519, ssh-rsa or ecdsa-sha2-.";
-  }
 }
 
 // ── Store ────────────────────────────────────────────────────────────────────
@@ -89,10 +72,6 @@ export interface SshNotice {
     key?: AuthorizedKey;
   };
 }
-
-export type AddResult =
-  | { ok: true }
-  | { ok: false; field?: string; banner?: { title: string; text: string } };
 
 const NO_ANSWER =
   "The unit didn't answer. Check the USB cable, then try again.";
@@ -132,8 +111,6 @@ export interface SshStore {
   disable: () => Promise<void>;
   setMode: (mode: SshMode) => Promise<void>;
   addThisComputer: () => Promise<void>;
-  /** For the Add Another Computer sheet: it stays open on failure. */
-  addKey: (text: string, name: string) => Promise<AddResult>;
   removeKey: (k: AuthorizedKey) => Promise<void>;
   reset: () => void;
 }
@@ -246,7 +223,7 @@ export function useSsh(): SshStore {
     await exclusive({ kind: "adding", name }, async () => {
       setNotice(null);
       try {
-        take(await api.sshAddKey(null));
+        take(await api.sshAddThisComputer());
       } catch (e) {
         await refresh(e);
         setNotice({
@@ -259,46 +236,13 @@ export function useSsh(): SshStore {
     });
   }, [exclusive, refresh, take, thisComputer]);
 
-  const addKey = useCallback(
-    async (text: string, name: string): Promise<AddResult> => {
-      let result: AddResult = { ok: false };
-      await exclusive({ kind: "adding", name }, async () => {
-        setNotice(null);
-        try {
-          take(await api.sshAddKey(text));
-          setNotice({
-            tone: "ok",
-            title: `${name} can log in`,
-            text: "From that computer: ssh root@fmic-tm-pro.local.",
-          });
-          result = { ok: true };
-        } catch (e) {
-          result = noAnswer(e)
-            ? {
-                ok: false,
-                banner: {
-                  title: "The computer wasn't added",
-                  text: NO_ANSWER,
-                },
-              }
-            : {
-                ok: false,
-                field: keyProblem(e instanceof ApiError ? e.code : ""),
-              };
-        }
-      });
-      return result;
-    },
-    [exclusive, take],
-  );
-
   const removeKey = useCallback(
     async (k: AuthorizedKey) => {
       const name = keyName(k);
       await exclusive({ kind: "removing", name }, async () => {
         setNotice(null);
         try {
-          const s = take(await api.sshRemoveKey(k.fingerprint));
+          const s = take(await api.sshRemoveKey(k));
           setNotice(
             s.keys.length === 0 && s.mode === "key"
               ? {
@@ -349,7 +293,6 @@ export function useSsh(): SshStore {
     disable,
     setMode,
     addThisComputer,
-    addKey,
     removeKey,
     reset,
   };

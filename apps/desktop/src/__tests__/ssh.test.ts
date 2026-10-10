@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ApiError, type AuthorizedKey, type SshState } from "../lib/api";
 import {
-  isPrivateKey,
   keyName,
-  keyProblem,
   keyTypeLabel,
   orderedKeys,
   shortFingerprint,
@@ -16,6 +14,7 @@ const key = (fingerprint: string, comment = "a@b"): AuthorizedKey => ({
   bits: 256,
   comment,
   fingerprint,
+  key: `key-${fingerprint}`,
 });
 
 const state = (extra: Partial<SshState> = {}): SshState => ({
@@ -27,18 +26,6 @@ const state = (extra: Partial<SshState> = {}): SshState => ({
 });
 
 describe("SSH access rules", () => {
-  it("recognizes private keys in every common format", () => {
-    for (const text of [
-      "-----BEGIN OPENSSH PRIVATE KEY-----\nb3Blbg==",
-      "-----BEGIN RSA PRIVATE KEY-----",
-      "-----BEGIN EC PRIVATE KEY-----",
-      "-----BEGIN PRIVATE KEY-----",
-      "PuTTY-User-Key-File-3: ssh-ed25519",
-    ])
-      expect(isPrivateKey(text), text).toBe(true);
-    expect(isPrivateKey("ssh-ed25519 AAAAC3Nza me@mac")).toBe(false);
-  });
-
   it("shortens fingerprints and names keys", () => {
     expect(
       shortFingerprint("SHA256:gnW2c+6N0FRetAkbDojHSGQN1p60SPD0Pr6927fmQ58"),
@@ -56,12 +43,6 @@ describe("SSH access rules", () => {
       "b",
     ]);
     expect(orderedKeys(keys, null)).toEqual(keys);
-  });
-
-  it("explains what's wrong with a pasted key", () => {
-    expect(keyProblem("several_lines")).toMatch(/one key at a time/);
-    expect(keyProblem("duplicate")).toBe("This computer can already log in.");
-    expect(keyProblem("not_a_key")).toMatch(/isn't a public key/);
   });
 
   it("knows when anyone can log in", () => {
