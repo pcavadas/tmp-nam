@@ -12,32 +12,20 @@ Neural amp model (NAM) playback for the owner's Fender Tone Master Pro
   player, USB root console and Wi-Fi SSH. The internal firmware is never modified;
   remove the card to boot stock.
 
+## Download
+
+Get the app from the [latest release](https://github.com/pcavadas/tmp-nam/releases/latest):
+`…_macos_apple-silicon.dmg` for a Mac with an M-series chip, `…_macos_intel.dmg` for an
+Intel Mac (Apple menu › About This Mac shows which; macOS 12 or later), and on Linux the
+`.deb` (Debian, Ubuntu), `.rpm` (Fedora, openSUSE) or `.AppImage` (any distribution).
+
 The app runs on **macOS and Linux** (Windows is not supported) and talks to the unit
 over the stock USB-C cable (the card's USB root console), so the pedal needs no Wi-Fi.
-Signed macOS builds and Linux packages are on the
-[Releases](https://github.com/pcavadas/tmp-nam/releases) page (see [Download](#download)). Its design (spec, tokens, screens) is in
-`apps/desktop/design/`.
+Its design (spec, tokens, screens) is in `apps/desktop/design/`.
 
 > Owner hardware only. While the card is booted, the USB console is an
 > unauthenticated root shell. Back up the unit (Pro Control) before first use; you
 > use this entirely at your own risk.
-
-## Download
-
-Get the file for your computer from the latest
-[release](https://github.com/pcavadas/tmp-nam/releases/latest):
-
-| Your computer | File |
-|---|---|
-| Mac with Apple silicon (M1 or later) | `TMP-NAM_<version>_macos_apple-silicon.dmg` |
-| Mac with an Intel processor | `TMP-NAM_<version>_macos_intel.dmg` |
-| Linux: Debian, Ubuntu and derivatives | `TMP-NAM_<version>_linux_amd64.deb` |
-| Linux: Fedora, openSUSE and other RPM distributions | `TMP-NAM_<version>_linux_x86_64.rpm` |
-| Linux: any other distribution | `TMP-NAM_<version>_linux_amd64.AppImage` |
-
-On a Mac, Apple menu › About This Mac shows the chip ("Apple M…" or "Intel") and the
-macOS version, which must be 12 (Monterey) or later. The Linux packages are for 64-bit
-Intel/AMD PCs. Ignore the "Source code" archives unless you build the app yourself.
 
 ## Repository layout
 

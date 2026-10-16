@@ -193,7 +193,7 @@ are the record.
   since the last tag releases automatically: it tags `v<version>` and creates the GitHub release,
   then tauri-action builds signed + notarized DMGs (the job uploads them alone, as
   `TMP-NAM_<version>_macos_apple-silicon.dmg` / `_macos_intel.dmg`) and uploads the Linux
-  `.deb`/`.rpm`/`.AppImage` as `TMP-NAM_<version>_linux_<arch>.<ext>`; README's Download table
+  `.deb`/`.rpm`/`.AppImage` as `TMP-NAM_<version>_linux_<arch>.<ext>`; README's Download paragraph
   names these files. Versions are never bumped by hand: the job stamps the release version into
   `apps/desktop/package.json` (read by `tauri.conf.json`) at build time only. Apple secrets live
   in the `release` environment.
