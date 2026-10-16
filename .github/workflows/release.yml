@@ -36,6 +36,7 @@ jobs:
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
       version: ${{ steps.tag.outputs.version }}
+      release_id: ${{ steps.tag.outputs.release_id }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -53,13 +54,18 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx semantic-release
-      # Hand the new tag (if any) to the build job.
+      # Hand the new tag (if any) and its release's ID to the build job.
       - name: Read the release tag
         id: tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="$(git tag --points-at HEAD --list 'v*' | head -n1)"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          if [ -n "$TAG" ]; then
+            echo "release_id=$(gh release view "$TAG" --json databaseId --jq .databaseId)" >> "$GITHUB_OUTPUT"
+          fi
 
   publish-tauri:
     needs: release
@@ -155,9 +161,12 @@ jobs:
         with:
           projectPath: apps/desktop
           tauriScript: bun run tauri
-          # No tag on macOS: build only (the action's README, "without having the action
-          # upload any assets"); the next step uploads the DMG.
-          tagName: ${{ runner.os == 'Linux' && needs.release.outputs.tag || '' }}
+          # Upload by release ID, not tagName: given a tag, the action finds the existing
+          # release and rewrites its body with `releaseBody` (empty), wiping semantic-release's
+          # notes (src/create-release.ts); with an ID it only uploads. None on macOS: build
+          # only (the action's README, "without having the action upload any assets"); the
+          # next step uploads the DMG.
+          releaseId: ${{ runner.os == 'Linux' && needs.release.outputs.release_id || '' }}
           releaseAssetNamePattern: TMP-NAM_linux_[arch][ext]
           args: ${{ matrix.args }}
 
