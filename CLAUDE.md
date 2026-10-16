@@ -188,8 +188,9 @@ are the record.
   App token, so the merge push triggers `release.yml`). External PRs are merged by hand by
   @pcavadas.
 - Iterate in draft (CodeRabbit skips drafts). Fix or answer CodeRabbit findings and never
-  resolve its threads by hand. Once CodeRabbit has resolved all its threads and required CI is
-  green on the head, post `@coderabbitai approve`; never post `resolve` or `full review`.
+  resolve its threads by hand. Post `@coderabbitai approve` only when CodeRabbit itself has
+  resolved all its threads, its latest review covers the PR's head commit (nothing pushed since)
+  and required CI is green on that head; never post `resolve` or `full review`.
 - `release.yml`: every merge to `main` runs semantic-release (default plugins); a `feat:`/`fix:`
   since the last tag releases automatically: it tags `v<version>` and creates the GitHub release,
   then tauri-action builds signed + notarized DMGs (the job uploads them alone, as
