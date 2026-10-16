@@ -14,10 +14,15 @@ Neural amp model (NAM) playback for the owner's Fender Tone Master Pro
 
 ## Download
 
-Get the app from the [latest release](https://github.com/pcavadas/tmp-nam/releases/latest):
-`…_macos_apple-silicon.dmg` for a Mac with an M-series chip, `…_macos_intel.dmg` for an
-Intel Mac (Apple menu › About This Mac shows which; macOS 12 or later), and on Linux the
-`.deb` (Debian, Ubuntu), `.rpm` (Fedora, openSUSE) or `.AppImage` (any distribution).
+| Your computer | Download |
+|---|---|
+| Mac with Apple silicon (M1 or later) | [TMP-NAM_macos_apple-silicon.dmg](https://github.com/pcavadas/tmp-nam/releases/latest/download/TMP-NAM_macos_apple-silicon.dmg) |
+| Mac with an Intel processor | [TMP-NAM_macos_intel.dmg](https://github.com/pcavadas/tmp-nam/releases/latest/download/TMP-NAM_macos_intel.dmg) |
+| Linux: Debian, Ubuntu | [TMP-NAM_linux_amd64.deb](https://github.com/pcavadas/tmp-nam/releases/latest/download/TMP-NAM_linux_amd64.deb) |
+| Linux: Fedora, openSUSE | [TMP-NAM_linux_x86_64.rpm](https://github.com/pcavadas/tmp-nam/releases/latest/download/TMP-NAM_linux_x86_64.rpm) |
+| Linux: other | [TMP-NAM_linux_amd64.AppImage](https://github.com/pcavadas/tmp-nam/releases/latest/download/TMP-NAM_linux_amd64.AppImage) |
+
+macOS 12 or later. Not sure which Mac? Apple menu › About This Mac.
 
 The app runs on **macOS and Linux** (Windows is not supported) and talks to the unit
 over the stock USB-C cable (the card's USB root console), so the pedal needs no Wi-Fi.

@@ -7,7 +7,8 @@
 # Build job: Tauri's GitHub pipeline guide (https://v2.tauri.app/distribute/pipelines/github/)
 # with its macOS signing steps (https://v2.tauri.app/distribute/sign/macos/). Asset names say
 # the OS and, for macOS, the chip ("apple-silicon"/"intel" rather than aarch64/x64), so users
-# can pick a download without knowing build triples. On Linux tauri-action uploads the bundles
+# can pick a download without knowing build triples. They carry no version, so README's
+# releases/latest/download/<name> links always fetch the newest release. On Linux tauri-action uploads the bundles
 # to the release semantic-release created, named by its `releaseAssetNamePattern`. On macOS it
 # only builds: its upload always adds a tarball of the .app next to the DMG (tauri-action
 # src/index.ts, no input turns it off), so the job uploads the DMG alone with `gh release upload`.
@@ -157,7 +158,7 @@ jobs:
           # No tag on macOS: build only (the action's README, "without having the action
           # upload any assets"); the next step uploads the DMG.
           tagName: ${{ runner.os == 'Linux' && needs.release.outputs.tag || '' }}
-          releaseAssetNamePattern: TMP-NAM_[version]_linux_[arch][ext]
+          releaseAssetNamePattern: TMP-NAM_linux_[arch][ext]
           args: ${{ matrix.args }}
 
       - name: upload the DMG
@@ -165,11 +166,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.release.outputs.tag }}
-          VERSION: ${{ needs.release.outputs.version }}
           ASSET: ${{ matrix.asset }}
           ARTIFACTS: ${{ steps.tauri.outputs.artifactPaths }}
         run: |
           DMG="$(jq -r '.[] | select(endswith(".dmg"))' <<<"$ARTIFACTS")"
-          NAME="TMP-NAM_${VERSION}_${ASSET}.dmg"
+          NAME="TMP-NAM_${ASSET}.dmg"
           cp "$DMG" "$RUNNER_TEMP/$NAME"
           gh release upload "$TAG" "$RUNNER_TEMP/$NAME" --repo "$GITHUB_REPOSITORY"
