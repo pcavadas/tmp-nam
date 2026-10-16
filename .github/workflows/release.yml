@@ -5,8 +5,13 @@
 # published to npm.
 #
 # Build job: Tauri's GitHub pipeline guide (https://v2.tauri.app/distribute/pipelines/github/)
-# with its macOS signing steps (https://v2.tauri.app/distribute/sign/macos/); tauri-action
-# uploads the bundles to the release semantic-release created.
+# with its macOS signing steps (https://v2.tauri.app/distribute/sign/macos/). Asset names say
+# the OS and, for macOS, the chip ("apple-silicon"/"intel" rather than aarch64/x64), so users
+# can pick a download without knowing build triples. They carry no version, so README's
+# releases/latest/download/<name> links always fetch the newest release. On Linux tauri-action uploads the bundles
+# to the release semantic-release created, named by its `releaseAssetNamePattern`. On macOS it
+# only builds: its upload always adds a tarball of the .app next to the DMG (tauri-action
+# src/index.ts, no input turns it off), so the job uploads the DMG alone with `gh release upload`.
 #
 # Auto-merges are armed with a GitHub App token (auto-merge.yml), so their merge pushes do
 # trigger this workflow.
@@ -31,6 +36,7 @@ jobs:
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
       version: ${{ steps.tag.outputs.version }}
+      release_id: ${{ steps.tag.outputs.release_id }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -48,13 +54,18 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx semantic-release
-      # Hand the new tag (if any) to the build job.
+      # Hand the new tag (if any) and its release's ID to the build job.
       - name: Read the release tag
         id: tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="$(git tag --points-at HEAD --list 'v*' | head -n1)"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          if [ -n "$TAG" ]; then
+            echo "release_id=$(gh release view "$TAG" --json databaseId --jq .databaseId)" >> "$GITHUB_OUTPUT"
+          fi
 
   publish-tauri:
     needs: release
@@ -68,8 +79,10 @@ jobs:
         include:
           - platform: 'macos-latest'
             args: '--target aarch64-apple-darwin'
+            asset: 'macos_apple-silicon'
           - platform: 'macos-latest'
             args: '--target x86_64-apple-darwin'
+            asset: 'macos_intel'
           - platform: 'ubuntu-22.04'
             args: ''
 
@@ -135,6 +148,7 @@ jobs:
           echo "Certificate imported."
 
       - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # action-v1.0.0
+        id: tauri
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -147,5 +161,25 @@ jobs:
         with:
           projectPath: apps/desktop
           tauriScript: bun run tauri
-          tagName: ${{ needs.release.outputs.tag }}
+          # Upload by release ID, not tagName: given a tag, the action finds the existing
+          # release and rewrites its body with `releaseBody` (empty), wiping semantic-release's
+          # notes (src/create-release.ts); with an ID it only uploads. None on macOS: build
+          # only (the action's README, "without having the action upload any assets"); the
+          # next step uploads the DMG.
+          releaseId: ${{ runner.os == 'Linux' && needs.release.outputs.release_id || '' }}
+          releaseAssetNamePattern: TMP-NAM_linux_[arch][ext]
           args: ${{ matrix.args }}
+
+      - name: upload the DMG
+        if: runner.os == 'macOS'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.release.outputs.tag }}
+          ASSET: ${{ matrix.asset }}
+          ARTIFACTS: ${{ steps.tauri.outputs.artifactPaths }}
+        run: |
+          DMG="$(jq -r '.[] | select(endswith(".dmg"))' <<<"$ARTIFACTS")"
+          NAME="TMP-NAM_${ASSET}.dmg"
+          cp "$DMG" "$RUNNER_TEMP/$NAME"
+          # --clobber: a re-run replaces the DMG an earlier attempt uploaded, as tauri-action does.
+          gh release upload "$TAG" "$RUNNER_TEMP/$NAME" --repo "$GITHUB_REPOSITORY" --clobber

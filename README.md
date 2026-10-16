@@ -12,11 +12,21 @@ Neural amp model (NAM) playback for the owner's Fender Tone Master Pro
   player, USB root console and Wi-Fi SSH. The internal firmware is never modified;
   remove the card to boot stock.
 
+## Download
+
+| Your computer | Download |
+|---|---|
+| Mac with Apple silicon (M1 or later) | [TMP-NAM_macos_apple-silicon.dmg](https://github.com/pcavadas/tmp-nam/releases/latest/download/TMP-NAM_macos_apple-silicon.dmg) |
+| Mac with an Intel processor | [TMP-NAM_macos_intel.dmg](https://github.com/pcavadas/tmp-nam/releases/latest/download/TMP-NAM_macos_intel.dmg) |
+| Linux: Debian, Ubuntu | [TMP-NAM_linux_amd64.deb](https://github.com/pcavadas/tmp-nam/releases/latest/download/TMP-NAM_linux_amd64.deb) |
+| Linux: Fedora, openSUSE | [TMP-NAM_linux_x86_64.rpm](https://github.com/pcavadas/tmp-nam/releases/latest/download/TMP-NAM_linux_x86_64.rpm) |
+| Linux: other | [TMP-NAM_linux_amd64.AppImage](https://github.com/pcavadas/tmp-nam/releases/latest/download/TMP-NAM_linux_amd64.AppImage) |
+
+macOS 12 or later. Not sure which Mac? Apple menu › About This Mac.
+
 The app runs on **macOS and Linux** (Windows is not supported) and talks to the unit
 over the stock USB-C cable (the card's USB root console), so the pedal needs no Wi-Fi.
-Signed macOS builds and Linux packages are on the
-[Releases](https://github.com/pcavadas/tmp-nam/releases) page. Its design (spec, tokens, screens) is in
-`apps/desktop/design/`.
+Its design (spec, tokens, screens) is in `apps/desktop/design/`.
 
 > Owner hardware only. While the card is booted, the USB console is an
 > unauthenticated root shell. Back up the unit (Pro Control) before first use; you

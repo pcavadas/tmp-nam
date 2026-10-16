@@ -191,8 +191,10 @@ are the record.
   `@coderabbitai approve`, `resolve` or `full review`, and never resolve its threads by hand.
 - `release.yml`: every merge to `main` runs semantic-release (default plugins); a `feat:`/`fix:`
   since the last tag releases automatically: it tags `v<version>` and creates the GitHub release,
-  then tauri-action builds and uploads signed + notarized aarch64/x86_64 DMGs and the Linux
-  `.deb`/`.rpm`/`.AppImage`. Versions are never bumped by hand: the job stamps the release version into
+  then tauri-action builds signed + notarized DMGs (the job uploads them alone, as
+  `TMP-NAM_macos_apple-silicon.dmg` / `TMP-NAM_macos_intel.dmg`) and uploads the Linux
+  `.deb`/`.rpm`/`.AppImage` as `TMP-NAM_linux_<arch>.<ext>`. Names carry no version: README's
+  Download table links `releases/latest/download/<name>`, so renaming an asset means updating it. Versions are never bumped by hand: the job stamps the release version into
   `apps/desktop/package.json` (read by `tauri.conf.json`) at build time only. Apple secrets live
   in the `release` environment.
 

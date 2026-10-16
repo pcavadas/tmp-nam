@@ -39,8 +39,11 @@ and the end of the log (never the Tone3000 key or tokens).
 
 Releases are cut by CI (`.github/workflows/release.yml`): on every merge to `main`,
 semantic-release reads the Conventional Commits since the last tag and, when a `feat:`/`fix:`
-is due, tags `v<version>` and creates the GitHub release; `tauri-apps/tauri-action` then adds
-signed and notarized macOS DMGs (Apple Silicon and Intel) and Linux `.deb`/`.rpm`/`.AppImage`. Windows is not
+is due, tags `v<version>` and creates the GitHub release; `tauri-apps/tauri-action` then builds
+signed and notarized macOS DMGs (`TMP-NAM_macos_apple-silicon.dmg`, `TMP-NAM_macos_intel.dmg`,
+uploaded by the job with `gh release upload` so no `.app.tar.gz` is published) and uploads the
+Linux `.deb`/`.rpm`/`.AppImage` as `TMP-NAM_linux_<arch>.<ext>`. Names carry no version so the
+README's `releases/latest/download/` links stay valid. Windows is not
 supported (the unit's console transport is Unix-only, and card building needs e2fsprogs/mtools).
 
 To reproduce a signed build locally, on a Mac with your Developer ID certificate in the login
