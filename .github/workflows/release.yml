@@ -181,4 +181,5 @@ jobs:
           DMG="$(jq -r '.[] | select(endswith(".dmg"))' <<<"$ARTIFACTS")"
           NAME="TMP-NAM_${ASSET}.dmg"
           cp "$DMG" "$RUNNER_TEMP/$NAME"
-          gh release upload "$TAG" "$RUNNER_TEMP/$NAME" --repo "$GITHUB_REPOSITORY"
+          # --clobber: a re-run replaces the DMG an earlier attempt uploaded, as tauri-action does.
+          gh release upload "$TAG" "$RUNNER_TEMP/$NAME" --repo "$GITHUB_REPOSITORY" --clobber
