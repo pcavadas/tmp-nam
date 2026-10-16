@@ -187,8 +187,9 @@ are the record.
 - The owner's and Dependabot's ready PRs get auto-merge armed by `auto-merge.yml` (GitHub
   App token, so the merge push triggers `release.yml`). External PRs are merged by hand by
   @pcavadas.
-- Iterate in draft (CodeRabbit skips drafts). Fix or answer CodeRabbit findings; never post
-  `@coderabbitai approve`, `resolve` or `full review`, and never resolve its threads by hand.
+- Iterate in draft (CodeRabbit skips drafts). Fix or answer CodeRabbit findings and never
+  resolve its threads by hand. Once CodeRabbit has resolved all its threads and required CI is
+  green on the head, post `@coderabbitai approve`; never post `resolve` or `full review`.
 - `release.yml`: every merge to `main` runs semantic-release (default plugins); a `feat:`/`fix:`
   since the last tag releases automatically: it tags `v<version>` and creates the GitHub release,
   then tauri-action builds signed + notarized DMGs (the job uploads them alone, as
