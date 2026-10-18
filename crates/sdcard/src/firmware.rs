@@ -2,7 +2,11 @@
 //! the rootfs tarball.
 
 use std::collections::HashSet;
+use std::fs::File;
+use std::io::BufReader;
 use std::path::{Path, PathBuf};
+
+use backhand::{FilesystemReader, InnerNode};
 
 use crate::release::Release;
 use crate::run;
@@ -75,14 +79,33 @@ pub fn check_rauc_manifest(path: &Path, release: &Release) -> Result<()> {
 /// Unpack the RAUC SquashFS and return the verified payload path.
 pub fn unpack_bundle(firmware: &Path, work: &Path, release: &Release) -> Result<PathBuf> {
     let squashfs = work.join("squashfs-root");
-    let unsquashfs = locate_tool("unsquashfs")?;
-    run!(unsquashfs, "-no-progress", "-d", squashfs, firmware)?;
+    std::fs::create_dir_all(&squashfs)?;
+    let bundle = FilesystemReader::from_reader(BufReader::new(File::open(firmware)?))
+        .map_err(|e| Error::msg(format!("cannot read the firmware's RAUC SquashFS: {e}")))?;
+    let mut names = vec![];
+    for node in bundle.files() {
+        let name = node
+            .fullpath
+            .strip_prefix("/")
+            .ok()
+            .and_then(|p| p.to_str())
+            .unwrap_or_default()
+            .to_string();
+        match &node.inner {
+            InnerNode::Dir(_) if name.is_empty() => continue,
+            InnerNode::File(file) if !name.is_empty() && !name.contains('/') => {
+                let mut reader = bundle
+                    .file(file)
+                    .reader_checked()
+                    .map_err(|e| Error::msg(format!("cannot read {name} from the bundle: {e}")))?;
+                std::io::copy(&mut reader, &mut File::create(squashfs.join(&name))?)?;
+            }
+            _ => {}
+        }
+        names.push(name);
+    }
     let manifest = squashfs.join("manifest.raucm");
     let payload = squashfs.join(&release.firmware.payload.name);
-    let mut names: Vec<String> = std::fs::read_dir(&squashfs)?
-        .filter_map(|e| e.ok())
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .collect();
     names.sort();
     let mut expected = vec![
         "manifest.raucm".to_string(),

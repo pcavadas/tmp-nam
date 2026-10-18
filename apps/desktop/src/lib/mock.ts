@@ -815,15 +815,7 @@ export async function mockInvoke(
       );
     }
     case "sd_environment": {
-      const tools = [
-        "unsquashfs",
-        "mke2fs",
-        "debugfs",
-        "e2fsck",
-        "mformat",
-        "mcopy",
-        "sfdisk",
-      ];
+      const tools = ["mke2fs", "debugfs", "e2fsck"];
       const env: SdEnvironment = {
         kit_root: "/Applications/TMP NAM.app/Contents/Resources/device",
         kit_error:
@@ -835,7 +827,7 @@ export async function mockInvoke(
           path:
             flag("sd") === "tools" && (name === "mke2fs" || name === "debugfs")
               ? null
-              : `/opt/homebrew/bin/${name}`,
+              : `/Applications/TMP NAM.app/Contents/MacOS/tmp-nam-${name}`,
         })),
         default_firmware: null,
         firmware_sha256: "392dd4a2",

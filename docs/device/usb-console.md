@@ -67,12 +67,12 @@ The build transformation is:
 ```text
 official .img
   -> verify exact size and SHA-256
-  -> unsquashfs the RAUC container
+  -> read the RAUC SquashFS container
   -> verify manifest identity, payload name, size, and SHA-256
   -> inventory and safely extract the rootfs tar with Unix metadata
   -> apply the bounded rootfs changes below
   -> build and check a fresh ext4 filesystem
-  -> partition the selected card and copy the official boot files
+  -> write the MBR and a FAT32 boot partition with the official boot files
   -> write 4 GiB of rootfs and hash all 4 GiB back from the card
 ```
 
@@ -276,26 +276,21 @@ are not build inputs and are never tracked in this repository. The A1/A2
 Temporary construction requires about 6 GiB of free space. The card must be at
 least 4,808,769,536 bytes; use an 8 GB or larger card in practice.
 
-### macOS Intel and Apple Silicon
+### Host tools
 
-Install Homebrew dependencies:
-
-```sh
-brew install squashfs e2fsprogs mtools util-linux
-```
-
-`diskutil` and `screen` are supplied by macOS. The builder locates Homebrew's
-`mke2fs`, `debugfs`, `e2fsck`, and `sfdisk` on both Intel and Apple Silicon paths.
-
-### Debian or Ubuntu Linux
+The builder reads the SquashFS, writes the FAT32 boot partition and the MBR
+itself. The only tools it runs are e2fsprogs' `mke2fs`, `debugfs` and `e2fsck`
+(bundled with the TMP NAM app) and the OS `tar`; on Linux the card writer also
+uses util-linux's `lsblk`, `findmnt`, `umount` and `eject`. The headless
+`tmp-sdcard` CLI takes e2fsprogs 1.47 or later from PATH (Ubuntu 22.04's 1.46 is
+too old):
 
 ```sh
-sudo apt-get update
-sudo apt-get install squashfs-tools e2fsprogs dosfstools fdisk parted udev mtools exfatprogs screen
+brew install e2fsprogs                 # macOS
+sudo apt-get install e2fsprogs screen  # Debian or Ubuntu
 ```
 
-`fdisk` supplies `sfdisk`; `parted` supplies `partprobe`; `dosfstools` supplies
-`mkfs.vfat`; and `mtools` is required only for portable-image creation.
+`diskutil` and `screen` are supplied by macOS.
 
 ## Build a physical card on macOS
 
@@ -319,8 +314,8 @@ Always pass a whole disk, never a partition such as `disk2s1` or `sdb1`.
 The final verification reads and hashes the complete 4 GiB root filesystem
 from the card. It can take about as long as the write, but detects incomplete
 writes and failing or counterfeit media. On macOS the verified card is ejected
-automatically; on Linux wait for the success message and remove it only after
-all activity has stopped.
+automatically; on Linux it is ejected too when `eject` succeeds, otherwise eject
+it in the file manager before removing it.
 
 ## Boot and connect
 
@@ -475,8 +470,8 @@ perform the first-boot checks, power-cycle checks, and card-removal stock boot.
   capacity independently.
 - **Firmware rejected:** use the unmodified official 1.8.58 image. Renaming a
   different bundle cannot satisfy the pinned size and hash.
-- **Required tool not found:** install the complete package set for the host
-  above and start a new terminal so Homebrew or package-manager paths refresh.
+- **Required tool not found:** reinstall the app, or for the CLI install
+  e2fsprogs as above and start a new terminal so PATH refreshes.
 - **Readback hash mismatch:** do not boot the card. Try a different
   reader/adapter, then a different card. A card may still boot with damaged
   unused blocks, but it is not a good card.
@@ -504,7 +499,7 @@ perform the first-boot checks, power-cycle checks, and card-removal stock boot.
 The guide is self-contained, but the important inputs can be independently
 re-derived from the official firmware and the physical unit.
 
-Verify and inspect the outer bundle:
+Verify and inspect the outer bundle (needs `unsquashfs`, from squashfs-tools):
 
 ```sh
 shasum -a 256 ToneMasterPro_v1_8_58.img

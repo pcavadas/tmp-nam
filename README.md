@@ -52,8 +52,9 @@ bun install
 bun run tauri dev        # TMP_NAM_SIM=1 bun run tauri dev  → simulated unit, no hardware
 ```
 
-Card building needs `brew install squashfs e2fsprogs mtools util-linux` and the
-official `ToneMasterPro_v1_8_58.img`. Headless:
+Card building needs the official `ToneMasterPro_v1_8_58.img`; the released app bundles
+everything else. Headless (uses `mke2fs`/`debugfs`/`e2fsck` from PATH, e.g.
+`brew install e2fsprogs`, 1.47 or later):
 
 ```sh
 cargo run --release -p tmp-sdcard -- image ~/Downloads/ToneMasterPro_v1_8_58.img build/card.img

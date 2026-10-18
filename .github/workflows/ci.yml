@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: true
 
 # macOS and Linux are the supported platforms; Windows is not (the unit's console
-# transport is Unix-only and card building needs e2fsprogs/mtools). Job names are the
+# transport is Unix-only and the bundled e2fsprogs tools are built for Unix). Job names are the
 # required status checks of the "protect main" ruleset (.github/rulesets/protect-main.json,
 # together with commitlint.yml's `commitlint`):
 # renaming a job or a matrix entry needs the ruleset updated in the same change.
@@ -138,6 +138,11 @@ jobs:
         working-directory: apps/desktop
         run: bun install --frozen-lockfile
 
+      # The card builder's e2fsprogs tools (built, then smoke-tested), bundled as sidecars
+      # by the --config below.
+      - name: Build the bundled e2fsprogs
+        run: tools/e2fsprogs/build.sh
+
       # Same action and bundle targets (tauri.conf.json "all") as release.yml, minus the
       # release upload. Ad-hoc signed ("-", Tauri's
       # macOS signing guide) so Apple Silicon doesn't report the artifact as damaged.
@@ -147,4 +152,6 @@ jobs:
         with:
           projectPath: apps/desktop
           tauriScript: bun run tauri
+          # Absolute: tauri-action reads this config itself as well as passing it on.
+          args: --config ${{ github.workspace }}/apps/desktop/src-tauri/tauri.e2fsprogs.conf.json
           uploadWorkflowArtifacts: true

@@ -44,7 +44,8 @@ signed and notarized macOS DMGs (`TMP-NAM_macos_apple-silicon.dmg`, `TMP-NAM_mac
 uploaded by the job with `gh release upload` so no `.app.tar.gz` is published) and uploads the
 Linux `.deb`/`.rpm`/`.AppImage` as `TMP-NAM_linux_<arch>.<ext>`. Names carry no version so the
 README's `releases/latest/download/` links stay valid. Windows is not
-supported (the unit's console transport is Unix-only, and card building needs e2fsprogs/mtools).
+supported (the unit's console transport is Unix-only, and the bundled e2fsprogs tools are built for
+Unix).
 
 To reproduce a signed build locally, on a Mac with your Developer ID certificate in the login
 keychain:
@@ -78,9 +79,27 @@ Then open it, connect the unit, add and remove a capture, and build an image-fil
 
 ## Card builder (`crates/sdcard`)
 
-Host tools: `brew install squashfs e2fsprogs mtools util-linux` (macOS) or
-`squashfs-tools e2fsprogs mtools util-linux dosfstools parted udev` (Linux). The
-builder searches PATH plus the Homebrew keg-only locations.
+The builder reads the RAUC SquashFS (`backhand`), writes the FAT32 boot partition
+(`fatfs`) and the MBR (`mbrman`) itself; the only host tools it runs are e2fsprogs'
+`mke2fs`, `debugfs` and `e2fsck`, plus the OS `tar`. It looks for them next to its own
+binary as `tmp-nam-<tool>` first, then on PATH and in the Homebrew keg-only locations,
+and always runs `mke2fs` with its compiled-in defaults (`MKE2FS_CONFIG` names a missing
+file, and `E2FSCK_CONFIG` too), so the host's configuration never changes the rootfs.
+
+The app bundles them as Tauri [sidecars](https://v2.tauri.app/develop/sidecar/):
+`tools/e2fsprogs/build.sh [target-triple]` builds the pinned e2fsprogs release (libraries
+linked statically, only the OS C library needed) into `apps/desktop/src-tauri/binaries/`
+with its license files, and `--config src-tauri/tauri.e2fsprogs.conf.json` adds them to a
+bundle. CI's `bundle` job and `release.yml` do both; dev builds and `cargo test` don't need
+them. For a local bundle:
+
+```sh
+tools/e2fsprogs/build.sh
+cd apps/desktop && bun run tauri build --config src-tauri/tauri.e2fsprogs.conf.json
+```
+
+Without a bundle (CLI, `tauri dev`): e2fsprogs 1.47 or later (`-O ^orphan_file`) from
+`brew install e2fsprogs` (macOS) or the distribution (Linux; Ubuntu 22.04's 1.46 is too old).
 
 ```sh
 cargo run --release -p tmp-sdcard -- verify

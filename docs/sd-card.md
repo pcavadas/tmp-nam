@@ -32,8 +32,8 @@ else (exact size + `sha256:392dd4a2…f41f38ec` enforced before it touches a car
 
 - macOS (Intel or Apple Silicon). A blank SD card, **8 GB minimum** (16–32 GB
   recommended), in the Mac's built-in SD slot or a USB card reader.
-- `brew install squashfs e2fsprogs mtools util-linux` (`unsquashfs`, `mke2fs`/`debugfs`/`e2fsck`, `mformat`/`mcopy`, `sfdisk`). The app's SD Card page lists anything missing.
-- Linux: use the `tmp-sdcard` CLI (`squashfs-tools e2fsprogs mtools util-linux dosfstools parted udev`).
+- Nothing else to install: the app includes the tools it needs.
+- Linux: use the `tmp-sdcard` CLI with e2fsprogs 1.47 or later installed.
 
 ## 2. Build the card
 

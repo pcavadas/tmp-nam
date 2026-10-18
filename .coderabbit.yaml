@@ -21,7 +21,7 @@ reviews:
           and cleanup are consistent across them. Siblings in this repo include:
           - `Unit::add` over HID (AddUserIR + install) vs the restart fallback (register, then one
             paced `reload_engine`) in apps/desktop/src-tauri/src/unit.rs;
-          - the macOS (ioreg, diskutil, osascript) vs Linux (sysfs, lsblk/sfdisk, pkexec) branches in
+          - the macOS (ioreg, diskutil, osascript) vs Linux (sysfs, lsblk/eject, pkexec) branches in
             console.rs, crates/sdcard/src/card.rs and apps/desktop/src-tauri/src/sdcard.rs;
           - image-file output (image.rs) vs physical card (card.rs) in crates/sdcard;
           - the real backend vs the simulator (`TMP_NAM_SIM`, unit.rs) vs the browser mock

@@ -48,15 +48,15 @@ function diskDetail(d: Disk): string {
   return `${formatBytes(d.bytes)} · ${bus}`;
 }
 
-/** Packages that provide each build tool (docs/sd-card.md): Homebrew, then Debian/Ubuntu. */
+/**
+ * Packages that provide each build tool: Homebrew, then Debian/Ubuntu. Released apps
+ * bundle them (tools/e2fsprogs/), so only development builds and damaged installs
+ * miss them.
+ */
 const PACKAGES: Record<string, [string, string]> = {
-  unsquashfs: ["squashfs", "squashfs-tools"],
   mke2fs: ["e2fsprogs", "e2fsprogs"],
   debugfs: ["e2fsprogs", "e2fsprogs"],
   e2fsck: ["e2fsprogs", "e2fsprogs"],
-  mformat: ["mtools", "mtools"],
-  mcopy: ["mtools", "mtools"],
-  sfdisk: ["util-linux", "fdisk"],
 };
 
 /** Install hint for the missing build tools on this platform. */
@@ -73,12 +73,12 @@ function toolsHint(
   ];
   if (platform === "macos")
     return {
-      text: "Install them with Homebrew in Terminal:",
+      text: "Reinstall TMP NAM, which includes them, or install them with Homebrew in Terminal:",
       command: `brew install ${pkgs(0).join(" ")}`,
     };
   if (platform === "linux")
     return {
-      text: "Install them with your package manager, for example:",
+      text: "Reinstall TMP NAM, which includes them, or install e2fsprogs 1.47 or later with your package manager, for example:",
       command: `sudo apt install ${pkgs(1).join(" ")}`,
     };
   return { text: "Building cards needs macOS or Linux.", command: null };

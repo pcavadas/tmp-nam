@@ -167,10 +167,6 @@ pub fn assert_file(path: &Path, expected: &Pin) -> Result<String> {
 }
 
 const TOOL_DIRS: &[&str] = &[
-    "/opt/homebrew/opt/util-linux/sbin",
-    "/usr/local/opt/util-linux/sbin",
-    "/opt/homebrew/opt/util-linux/bin",
-    "/usr/local/opt/util-linux/bin",
     "/opt/homebrew/opt/e2fsprogs/sbin",
     "/usr/local/opt/e2fsprogs/sbin",
     "/opt/homebrew/bin",
@@ -181,9 +177,25 @@ const TOOL_DIRS: &[&str] = &[
     "/sbin",
 ];
 
-/// Find a host tool on PATH or in the Homebrew/system locations a GUI app's
-/// minimal PATH misses (keg-only e2fsprogs/util-linux included).
+/// The app bundles the e2fsprogs tools next to its binary under this prefix
+/// (Tauri sidecars, `tools/e2fsprogs/`), so they never shadow a system copy.
+pub const BUNDLED_PREFIX: &str = "tmp-nam-";
+
+/// Find a host tool: for the build tools, the copy bundled next to this binary (the
+/// directory Tauri's sidecar lookup uses), then PATH, then the Homebrew/system
+/// locations a GUI app's minimal PATH misses (keg-only e2fsprogs).
 pub fn locate_tool(name: &str) -> Result<PathBuf> {
+    let bundled = crate::BUILD_TOOLS
+        .contains(&name)
+        .then(|| std::env::current_exe().and_then(std::fs::canonicalize).ok())
+        .flatten()
+        .and_then(|exe| {
+            exe.parent()
+                .map(|d| d.join(format!("{BUNDLED_PREFIX}{name}")))
+        });
+    if let Some(p) = bundled.filter(|p| is_executable(p)) {
+        return Ok(p);
+    }
     let path = std::env::var("PATH").unwrap_or_default();
     let dirs = path
         .split(':')
@@ -229,10 +241,20 @@ impl<T: AsRef<std::ffi::OsStr>> AsRefOsStr for T {
 
 /// Run a command to completion; non-zero exit is an error carrying its output.
 pub fn run(cmd: &[&dyn AsRefOsStr], stdin: Option<&str>) -> Result<Output> {
+    run_env(cmd, stdin, &[])
+}
+
+/// `run` with extra environment variables.
+pub fn run_env(
+    cmd: &[&dyn AsRefOsStr],
+    stdin: Option<&str>,
+    env: &[(&str, &Path)],
+) -> Result<Output> {
     let (program, args) = cmd
         .split_first()
         .ok_or_else(|| Error::msg("empty command"))?;
     let mut c = Command::new(program.as_os());
+    c.envs(env.iter().copied());
     for a in args {
         c.arg(a.as_os());
     }
@@ -267,9 +289,13 @@ pub fn run(cmd: &[&dyn AsRefOsStr], stdin: Option<&str>) -> Result<Output> {
     Ok(Output { stdout, stderr })
 }
 
-/// `run!(a, b, c)` with heterogeneous OsStr-like arguments.
+/// `run!(a, b, c)` with heterogeneous OsStr-like arguments; `run!(env [(k, v)]; a, b)`
+/// adds environment variables, `run!(Some(input); a, b)` feeds stdin.
 #[macro_export]
 macro_rules! run {
+    (env $env:expr; $($arg:expr),+ $(,)?) => {
+        $crate::util::run_env(&[$(&$arg as &dyn $crate::util::AsRefOsStr),+], None, $env)
+    };
     ($stdin:expr; $($arg:expr),+ $(,)?) => {
         $crate::util::run(&[$(&$arg as &dyn $crate::util::AsRefOsStr),+], $stdin)
     };

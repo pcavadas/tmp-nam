@@ -19,8 +19,10 @@ Requires stable Rust (pinned by `rust-toolchain.toml`) and [Bun](https://bun.sh)
 sudo apt-get install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libudev-dev libxdo-dev
 ```
 
-The card builder needs `squashfs e2fsprogs mtools util-linux` (Homebrew) or
-`squashfs-tools e2fsprogs mtools util-linux dosfstools parted udev` (Linux).
+Outside a release bundle the card builder runs e2fsprogs (`mke2fs`, `debugfs`, `e2fsck`)
+from PATH, version 1.47 or later: `brew install e2fsprogs` (macOS) or `e2fsprogs`
+(Linux; Ubuntu 22.04 ships 1.46). Release bundles carry
+their own copies, built by `tools/e2fsprogs/build.sh`.
 
 ```bash
 scripts/check.sh quick     # syntax, helper tests, release-pin integrity, no-exploit grep

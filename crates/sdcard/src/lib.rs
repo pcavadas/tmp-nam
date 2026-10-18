@@ -6,9 +6,8 @@
 //! the bounded change set in `rootfs.rs`. The internal eMMC is never touched.
 //!
 //! Pipeline: validate firmware → unpack RAUC → inventory + extract rootfs → apply
-//! delta → mke2fs/debugfs/e2fsck + audit → (image) FAT + MBR + readback, or
-//! (card) the same MBR + FAT written raw (macOS) or partition + copy boot (Linux),
-//! then raw rootfs write + readback.
+//! delta → mke2fs/debugfs/e2fsck + audit → FAT + MBR, then (image) the rootfs and a
+//! readback, or (card) the same MBR + FAT and the rootfs written raw, each read back.
 
 pub mod card;
 pub mod cli;
@@ -29,15 +28,8 @@ pub use util::{Error, PrintReporter, Reporter, Result};
 
 use util::{bail, locate_tool, remove_tree, sha256_file};
 
-pub const BUILD_TOOLS: &[&str] = &[
-    "unsquashfs",
-    "mformat",
-    "mcopy",
-    "mke2fs",
-    "debugfs",
-    "e2fsck",
-    "sfdisk",
-];
+/// The host tools a build runs (the app bundles them; `tar` ships with the OS).
+pub const BUILD_TOOLS: &[&str] = &["mke2fs", "debugfs", "e2fsck"];
 
 /// A work directory removed on drop, read-only firmware directories included.
 pub struct WorkDir {
@@ -96,7 +88,7 @@ pub fn build_rootfs(
     r: &dyn Reporter,
 ) -> Result<Prepared> {
     const TOTAL: u64 = 5;
-    for t in ["unsquashfs", "mke2fs", "debugfs", "e2fsck", "tar"] {
+    for t in BUILD_TOOLS.iter().chain(&["tar"]) {
         locate_tool(t)?;
     }
     device.verify(release)?;
@@ -158,9 +150,6 @@ pub fn build_image(
             "refusing to overwrite existing output: {}",
             output.display()
         ));
-    }
-    for t in BUILD_TOOLS {
-        locate_tool(t)?;
     }
     let result = (|| {
         let p = build_rootfs(release, device, firmware, r)?;

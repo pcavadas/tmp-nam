@@ -8,19 +8,17 @@
 //! through pkexec.
 
 use std::fs::File;
-use std::path::{Path, PathBuf};
+use std::io::{Seek, SeekFrom};
+use std::path::Path;
 use std::process::Command;
 
 use serde::Serialize;
 
-use crate::image::{
-    assemble_head, boot_files, check_partition_layout, create_boot_fat, partition_2_sectors,
-    sfdisk_table, verify_partition_layout, write_into,
-};
+use crate::image::{assemble_head, check_partition_layout, create_boot_fat, write_into};
 use crate::release::Release;
 use crate::run;
 use crate::util::{
-    assert_file, bail, format_bytes, locate_tool, sha256_file, sha256_reader, Reporter, Result,
+    bail, format_bytes, locate_tool, sha256_file, sha256_reader, write_all, Reporter, Result,
 };
 
 /// The error when the administrator prompt is cancelled or refused.
@@ -320,6 +318,9 @@ pub fn validate_capacity(info: &DeviceInfo, release: &Release) -> Result<()> {
     if !info.bytes.is_multiple_of(release.layout.sector_bytes) {
         return bail("SD card size is not a whole number of 512-byte sectors");
     }
+    if info.bytes / release.layout.sector_bytes > 0xFFFF_FFFF {
+        return bail("SD card is larger than 2 TiB, which an MBR card layout cannot address");
+    }
     Ok(())
 }
 
@@ -367,40 +368,6 @@ fn unmount(info: &DeviceInfo) -> Result<()> {
     }
     for p in paths.iter().rev() {
         run!(locate_tool("umount")?, p)?;
-    }
-    Ok(())
-}
-
-fn write_rootfs_partition(source: &Path, destination: &Path, r: &dyn Reporter) -> Result<()> {
-    let mut dst = std::fs::OpenOptions::new().write(true).open(destination)?;
-    write_into(source, &mut dst, 0, Some((r, "Writing rootfs partition")))?;
-    dst.sync_all()?;
-    Ok(())
-}
-
-fn verify_written_rootfs(
-    path: &Path,
-    rootfs_image: &Path,
-    expected: &str,
-    r: &dyn Reporter,
-) -> Result<()> {
-    let len = std::fs::metadata(rootfs_image)?.len();
-    if sha256_file(path, Some(len), 0, Some((r, "Verifying rootfs")))? != expected {
-        return bail("rootfs partition readback hash mismatch");
-    }
-    Ok(())
-}
-
-fn copy_boot_files(rootfs: &Path, mountpoint: &Path, release: &Release) -> Result<()> {
-    for (source, fat_name) in boot_files(rootfs, release)? {
-        let dest = mountpoint.join(&fat_name);
-        std::fs::copy(&source, &dest)?;
-        let pin = if fat_name == release.boot.image.fat_name {
-            release.boot.image.pin()
-        } else {
-            release.boot.dtb.pin()
-        };
-        assert_file(&dest, &pin)?;
     }
     Ok(())
 }
@@ -499,25 +466,60 @@ fn receive_fd(socket: &std::os::unix::net::UnixStream) -> (Option<std::os::fd::O
     (None, String::from_utf8_lossy(&text).trim().to_string())
 }
 
-/// What the card writer needs opened before the build: on macOS the unmounted raw
-/// disk through the administrator prompt, so a refusal costs nothing and the long
-/// build runs unattended. On Linux the helper already runs as root.
-pub fn open(target: &DeviceInfo) -> Result<Option<File>> {
+/// The unmounted whole card, opened read/write before the build so a refusal costs
+/// nothing and the long build runs unattended: on macOS the raw disk through the
+/// administrator prompt; on Linux (the helper runs as root) exclusively, so nothing
+/// mounts its partitions while the card is written.
+pub fn open(target: &DeviceInfo) -> Result<File> {
+    unmount(target)?;
     #[cfg(target_os = "macos")]
     {
-        unmount(target)?;
-        authopen(&target.raw).map(Some)
+        authopen(&target.raw)
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = target;
-        Ok(None)
+        use std::os::fd::AsRawFd;
+        use std::os::unix::fs::OpenOptionsExt;
+        let disk = File::options()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_EXCL)
+            .open(&target.raw)
+            .map_err(|e| match e.raw_os_error() {
+                Some(libc::EBUSY) => crate::util::Error::msg(
+                    "The SD card is in use by another program; nothing was written",
+                ),
+                _ => e.into(),
+            })?;
+        // systemd's block device locking: udev doesn't probe a disk locked this way,
+        // so it doesn't read the card while it is being written.
+        if unsafe { libc::flock(disk.as_raw_fd(), libc::LOCK_EX) } != 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        Ok(disk)
     }
+}
+
+/// Make the next reads of `disk` come from the card. macOS raw disks bypass the OS
+/// cache (and reject `sync_all`, F_FULLFSYNC); a Linux block device is flushed and
+/// its cached pages dropped.
+fn flush_for_readback(disk: &File) -> Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+        disk.sync_all()?;
+        let rc = unsafe { libc::posix_fadvise(disk.as_raw_fd(), 0, 0, libc::POSIX_FADV_DONTNEED) };
+        if rc != 0 {
+            return Err(std::io::Error::from_raw_os_error(rc).into());
+        }
+    }
+    let _ = disk;
+    Ok(())
 }
 
 /// The whole card through one raw descriptor: the MBR and boot partition as the
 /// portable image lays them out, then the rootfs, each read back.
-fn prepare_macos(
+fn prepare(
     target: &DeviceInfo,
     mut disk: File,
     rootfs: &Path,
@@ -537,10 +539,15 @@ fn prepare_macos(
         .write(true)
         .open(&head)?
         .set_len(head_bytes)?;
-    unmount(target)?;
-    // Raw-disk writes bypass the OS cache, and macOS rejects `sync_all` (F_FULLFSYNC)
-    // on a raw disk; the readbacks read the card and `diskutil eject` flushes it.
+    if cfg!(target_os = "macos") {
+        unmount(target)?;
+    }
+    // A card that held GPT keeps a backup header in its last sectors; clear them.
+    let tail = 1024 * 1024;
+    disk.seek(SeekFrom::Start(target.bytes - tail))?;
+    write_all(&mut disk, &vec![0u8; tail as usize])?;
     write_into(&head, &mut disk, 0, None)?;
+    flush_for_readback(&disk)?;
     check_partition_layout(&mut disk, release)?;
     if sha256_reader(&mut disk, Some(head_bytes), 0, None)? != sha256_file(&head, None, 0, None)? {
         return bail("boot partition readback hash mismatch");
@@ -552,6 +559,7 @@ fn prepare_macos(
         head_bytes,
         Some((r, "Writing rootfs partition")),
     )?;
+    flush_for_readback(&disk)?;
     let len = std::fs::metadata(image)?.len();
     if sha256_reader(
         &mut disk,
@@ -562,85 +570,38 @@ fn prepare_macos(
     {
         return bail("rootfs partition readback hash mismatch");
     }
-    // Closing the disk brings its partitions back and macOS mounts BOOT, so the
-    // eject can be refused (Spotlight); the card is complete either way.
     drop(disk);
-    if run!("/usr/sbin/diskutil", "eject", target.logical).is_ok() {
-        r.status("Card verified and ejected — ready to boot");
+    if cfg!(target_os = "macos") {
+        // Closing the disk brings its partitions back and macOS mounts BOOT, so the
+        // eject can be refused (Spotlight); the card is complete either way.
+        if run!("/usr/sbin/diskutil", "eject", target.logical).is_ok() {
+            r.status("Card verified and ejected — ready to boot");
+        } else {
+            r.status("Card verified — eject it in Finder before removing it");
+        }
     } else {
-        r.status("Card verified — eject it in Finder before removing it");
+        // Closing the disk makes udev re-read the new partitions, and desktop
+        // automounters may then mount them; eject(1) unmounts them and ejects the card,
+        // as `diskutil eject` does. The card is complete either way.
+        let ejected = locate_tool("udevadm")
+            .and_then(|u| run!(u, "settle"))
+            .and_then(|_| locate_tool("eject"))
+            .and_then(|e| run!(e, target.logical));
+        if ejected.is_ok() {
+            r.status("Card verified and ejected — ready to boot");
+        } else {
+            r.status("Card verified — eject it in your file manager before removing it");
+        }
     }
     Ok(())
 }
 
-fn linux_partition(device: &str, n: u32) -> String {
-    let tail = device.trim_end_matches(|c: char| c.is_ascii_digit());
-    let ends_digit = tail.len() != device.len();
-    let sep = if ends_digit && (device.contains("mmcblk") || device.contains("nvme")) {
-        "p"
-    } else {
-        ""
-    };
-    format!("{device}{sep}{n}")
-}
-
-fn prepare_linux(
-    target: &DeviceInfo,
-    rootfs: &Path,
-    image: &Path,
-    sha: &str,
-    release: &Release,
-    r: &dyn Reporter,
-) -> Result<()> {
-    let p1 = &release.layout.partition_1;
-    let card_sectors = target.bytes / release.layout.sector_bytes;
-    let table = sfdisk_table(release, partition_2_sectors(card_sectors, release)?);
-    r.progress("Preparing partitions", 0, 1);
-    unmount(target)?;
-    run!(Some(table.as_str()); locate_tool("sfdisk")?, "--quiet", "--wipe", "always", target.logical)?;
-    run!(locate_tool("partprobe")?, target.logical)?;
-    run!(locate_tool("udevadm")?, "settle")?;
-    verify_partition_layout(Path::new(&target.raw), release)?;
-    let boot = linux_partition(&target.logical, 1);
-    let root = PathBuf::from(linux_partition(&target.logical, 2));
-    run!(
-        locate_tool("mkfs.vfat")?,
-        "-F",
-        "32",
-        "-S",
-        "512",
-        "-s",
-        "8",
-        "-h",
-        "2048",
-        "-g",
-        "54/32",
-        "-n",
-        p1.label,
-        boot
-    )?;
-    let mp = tempfile::Builder::new()
-        .prefix("tmp-boot-mount-")
-        .tempdir()?;
-    run!(locate_tool("mount")?, boot, mp.path())?;
-    let copied = copy_boot_files(rootfs, mp.path(), release).and_then(|_| run!("sync").map(|_| ()));
-    run!(locate_tool("umount")?, mp.path())?;
-    copied?;
-    r.progress("Preparing partitions", 1, 1);
-    write_rootfs_partition(image, &root, r)?;
-    verify_written_rootfs(&root, image, sha, r)?;
-    run!("sync")?;
-    r.status("Card verified — safe to remove and ready to boot");
-    Ok(())
-}
-
-/// Write an already-built rootfs to a card, through `disk` from `open` on macOS and
-/// as root on Linux. `expect` is the identity the user confirmed; the card is
-/// re-validated and must still match it.
+/// Write an already-built rootfs to a card through `disk` from `open`. `expect` is
+/// the identity the user confirmed; the card is re-validated and must still match it.
 pub fn write_prepared(
     device: &str,
     expect: Option<&DeviceInfo>,
-    disk: Option<File>,
+    disk: File,
     built: &crate::Prepared,
     release: &Release,
     r: &dyn Reporter,
@@ -653,20 +614,15 @@ pub fn write_prepared(
         }
     }
     validate_capacity(&target, release)?;
-    if cfg!(target_os = "macos") {
-        let disk = disk.ok_or_else(|| crate::util::Error::msg("SD card was not opened"))?;
-        prepare_macos(
-            &target,
-            disk,
-            rootfs,
-            rootfs_image,
-            rootfs_sha256,
-            release,
-            r,
-        )
-    } else {
-        prepare_linux(&target, rootfs, rootfs_image, rootfs_sha256, release, r)
-    }
+    prepare(
+        &target,
+        disk,
+        rootfs,
+        rootfs_image,
+        rootfs_sha256,
+        release,
+        r,
+    )
 }
 
 #[cfg(test)]
@@ -744,7 +700,5 @@ mod tests {
         assert!(is_linux_whole("/dev/mmcblk0"));
         assert!(is_linux_whole("/dev/nvme0n1"));
         assert!(!is_linux_whole("/dev/sdb1"));
-        assert_eq!(linux_partition("/dev/mmcblk0", 2), "/dev/mmcblk0p2");
-        assert_eq!(linux_partition("/dev/sdb", 1), "/dev/sdb1");
     }
 }

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "externalBin": [
+      "binaries/tmp-nam-mke2fs",
+      "binaries/tmp-nam-debugfs",
+      "binaries/tmp-nam-e2fsck"
+    ],
+    "resources": {
+      "binaries/licenses/": "licenses/"
+    }
+  }
+}
