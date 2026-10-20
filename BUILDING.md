@@ -13,6 +13,11 @@ bun run dev                        # UI only, in a browser, against the in-page 
 bun run tauri build                # .app/.dmg on macOS, .deb/.rpm/.AppImage on Linux (bundles device/)
 ```
 
+The bundles carry `device/` as a resource on macOS (`tauri.macos.conf.json`) and as
+`/usr/share/tmp-nam-companion/device` on Linux (`tauri.linux.conf.json`, each bundle's `files`):
+the AppImage's linuxdeploy adds `RUNPATH $ORIGIN` to every ELF file under the AppDir's `usr/lib`,
+where resources go, which would change the pinned `device/bin` files.
+
 Frontend checks: `bun run typecheck`, `bun run lint`, `bun run test`. Rust:
 `cargo test --workspace`, `cargo clippy --workspace --all-targets`. Everything:
 `scripts/check.sh all`.

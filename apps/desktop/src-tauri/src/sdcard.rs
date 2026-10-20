@@ -107,10 +107,22 @@ pub fn stage(label: &str) -> Option<usize> {
     STAGES.iter().position(|labels| labels.contains(&label))
 }
 
-/// The pinned `device/` assets: bundled resource in a release, repo copy in development.
+/// The pinned `device/` assets: bundled in a release, repo copy in development.
+///
+/// macOS bundles them as a resource. Linux ships them as `<prefix>/share/tmp-nam-companion/device`
+/// next to `<prefix>/bin/<exe>` (`tauri.linux.conf.json`, the deb/rpm/AppImage `files`), not as a
+/// resource: the AppImage's linuxdeploy adds `RUNPATH $ORIGIN` to every ELF file under the
+/// AppDir's `usr/lib` (the resource directory), which breaks the pinned bytes of `device/bin`.
 pub fn device_dir(app: &tauri::AppHandle) -> Option<DeviceDir> {
     let mut candidates: Vec<PathBuf> = vec![];
-    if let Ok(res) = app.path().resource_dir() {
+    if cfg!(target_os = "linux") {
+        if let Some(prefix) = std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent()?.parent().map(Path::to_path_buf))
+        {
+            candidates.push(prefix.join("share/tmp-nam-companion/device"));
+        }
+    } else if let Ok(res) = app.path().resource_dir() {
         candidates.push(res.join("device"));
     }
     if cfg!(debug_assertions) {
