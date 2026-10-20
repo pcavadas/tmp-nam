@@ -1,0 +1,22 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "linux": {
+      "deb": {
+        "files": {
+          "/usr/share/tmp-nam-companion/device": "../../../device/"
+        }
+      },
+      "rpm": {
+        "files": {
+          "/usr/share/tmp-nam-companion/device": "../../../device/"
+        }
+      },
+      "appimage": {
+        "files": {
+          "/usr/share/tmp-nam-companion/device": "../../../device/"
+        }
+      }
+    }
+  }
+}
