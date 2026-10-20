@@ -492,9 +492,16 @@ pub fn open(target: &DeviceInfo) -> Result<File> {
                 _ => e.into(),
             })?;
         // systemd's block device locking: udev doesn't probe a disk locked this way,
-        // so it doesn't read the card while it is being written.
-        if unsafe { libc::flock(disk.as_raw_fd(), libc::LOCK_EX) } != 0 {
-            return Err(std::io::Error::last_os_error().into());
+        // so it doesn't read the card while it is being written. Non-blocking, so a
+        // lock another program holds is refused instead of waited on.
+        if unsafe { libc::flock(disk.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            let e = std::io::Error::last_os_error();
+            return Err(match e.raw_os_error() {
+                Some(libc::EWOULDBLOCK) => crate::util::Error::msg(
+                    "The SD card is in use by another program; nothing was written",
+                ),
+                _ => e.into(),
+            });
         }
         Ok(disk)
     }

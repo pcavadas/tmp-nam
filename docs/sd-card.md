@@ -30,10 +30,11 @@ else (exact size + `sha256:392dd4a2…f41f38ec` enforced before it touches a car
 
 ## 1. Prerequisites
 
-- macOS (Intel or Apple Silicon). A blank SD card, **8 GB minimum** (16–32 GB
-  recommended), in the Mac's built-in SD slot or a USB card reader.
-- Nothing else to install: the app includes the tools it needs.
-- Linux: use the `tmp-sdcard` CLI with e2fsprogs 1.47 or later installed.
+- macOS (Intel or Apple Silicon) or Linux. A blank SD card, **8 GB minimum**
+  (16–32 GB recommended), in the computer's SD slot or a USB card reader.
+- Nothing else to install: the app (DMG, or the Linux `.deb`/`.rpm`/`.AppImage`)
+  includes the tools it needs.
+- Headless alternative: the `tmp-sdcard` CLI, with e2fsprogs 1.47 or later on PATH.
 
 ## 2. Build the card
 

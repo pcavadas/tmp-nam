@@ -142,7 +142,8 @@ pub fn write_boot_fat(files: &[BootEntry], output: &Path, release: &Release) -> 
     let mut f = File::options()
         .read(true)
         .write(true)
-        .create_new(true)
+        .create(true)
+        .truncate(true)
         .open(output)?;
     f.set_len(p1.sector_count * l.sector_bytes)?;
     let narrow = |v: u32| u16::try_from(v).map_err(|_| Error::msg("invalid FAT geometry"));

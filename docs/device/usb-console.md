@@ -287,7 +287,7 @@ too old):
 
 ```sh
 brew install e2fsprogs                 # macOS
-sudo apt-get install e2fsprogs screen  # Debian or Ubuntu
+sudo apt-get install e2fsprogs screen  # Debian 13+ or Ubuntu 24.04+
 ```
 
 `diskutil` and `screen` are supplied by macOS.

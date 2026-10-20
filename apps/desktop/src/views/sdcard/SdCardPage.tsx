@@ -49,14 +49,13 @@ function diskDetail(d: Disk): string {
 }
 
 /**
- * Packages that provide each build tool: Homebrew, then Debian/Ubuntu. Released apps
- * bundle them (tools/e2fsprogs/), so only development builds and damaged installs
- * miss them.
+ * Homebrew packages that provide each build tool. Released apps bundle them
+ * (tools/e2fsprogs/), so only development builds and damaged installs miss them.
  */
-const PACKAGES: Record<string, [string, string]> = {
-  mke2fs: ["e2fsprogs", "e2fsprogs"],
-  debugfs: ["e2fsprogs", "e2fsprogs"],
-  e2fsck: ["e2fsprogs", "e2fsprogs"],
+const PACKAGES: Record<string, string> = {
+  mke2fs: "e2fsprogs",
+  debugfs: "e2fsprogs",
+  e2fsck: "e2fsprogs",
 };
 
 /** Install hint for the missing build tools on this platform. */
@@ -64,22 +63,22 @@ function toolsHint(
   platform: string,
   missing: string[],
 ): { text: string; command: string | null } {
-  const pkgs = (col: 0 | 1) => [
-    ...new Set(
-      missing
-        .map((t) => PACKAGES[t]?.[col])
-        .filter((p): p is string => Boolean(p)),
-    ),
-  ];
-  if (platform === "macos")
+  if (platform === "macos") {
+    const pkgs = [
+      ...new Set(
+        missing.map((t) => PACKAGES[t]).filter((p): p is string => Boolean(p)),
+      ),
+    ];
     return {
       text: "Reinstall TMP NAM, which includes them, or install them with Homebrew in Terminal:",
-      command: `brew install ${pkgs(0).join(" ")}`,
+      command: `brew install ${pkgs.join(" ")}`,
     };
+  }
+  // Distributions differ, and some ship an e2fsprogs older than 1.47 (Ubuntu 22.04).
   if (platform === "linux")
     return {
-      text: "Reinstall TMP NAM, which includes them, or install e2fsprogs 1.47 or later with your package manager, for example:",
-      command: `sudo apt install ${pkgs(1).join(" ")}`,
+      text: "Reinstall TMP NAM, which includes them, or install e2fsprogs 1.47 or later.",
+      command: null,
     };
   return { text: "Building cards needs macOS or Linux.", command: null };
 }

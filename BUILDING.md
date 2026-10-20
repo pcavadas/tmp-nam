@@ -56,7 +56,8 @@ export APPLE_SIGNING_IDENTITY="Developer ID Application: <Name> (<TEAMID>)"
 export APPLE_ID="<apple id email>"
 export APPLE_PASSWORD="<app-specific password>"   # appleid.apple.com › Sign-In and Security
 export APPLE_TEAM_ID="<TEAMID>"
-cd apps/desktop && bun run tauri build             # signs, notarizes and staples the .app/.dmg
+tools/e2fsprogs/build.sh                           # the bundled e2fsprogs sidecars
+cd apps/desktop && bun run tauri build --config src-tauri/tauri.e2fsprogs.conf.json   # signs, notarizes and staples the .app/.dmg
 ```
 
 `tauri.conf.json` reads its version from `apps/desktop/package.json`. The committed version
