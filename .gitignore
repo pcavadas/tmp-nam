@@ -36,3 +36,6 @@ node_modules/
 # NAM captures are never committed (third-party models); tests use the pinned
 # NeuralAmpModelerCore example_models/ fetched by player/bootstrap_nam_deps.sh.
 *.nam
+
+# Bundled e2fsprogs sidecars and their licenses (tools/e2fsprogs/build.sh)
+apps/desktop/src-tauri/binaries/

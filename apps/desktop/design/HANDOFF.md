@@ -127,7 +127,7 @@ Two inputs on one page plus an "About the card" aside:
 2. **SD card:** removable disks detected automatically, as a radio list (name, size, bus). Refused disks stay visible, disabled, with the reason ("Not a USB reader"). None: "Insert the SD card into a USB card reader…".
 
 **Prerequisites** (shown above, and they block the page):
-- Missing command-line tools, with the Homebrew command, Copy and Check Again.
+- Missing command-line tools (development builds and damaged installs only; releases bundle e2fsprogs), with "Reinstall TMP NAM" plus the Homebrew command, Copy and Check Again.
 - Damaged app assets: "Download TMP NAM again and replace this copy."
 
 **Create SD Card…** (enabled when both inputs are valid):
@@ -177,7 +177,7 @@ Segmented: Tone3000 · Allowed Variants · Unit.
 These are design assumptions, not known facts. Confirm them while building:
 
 1. **A1 size:** shown only when known. Assumed known only for captures installed from Tone3000. If `.nam` metadata includes it, show it for local files too.
-2. **Command-line tools:** the screen names `mke2fs` / `debugfs` and `brew install e2fsprogs` as placeholders. Use the real list.
+2. **Command-line tools:** the real list is `mke2fs` / `debugfs` / `e2fsck` (`brew install e2fsprogs`).
 3. **API key storage:** the Keychain is assumed.
 4. **Interrupted transfer:** the copy says the partial file isn't kept. The app must guarantee it, or the copy changes.
 5. **Not registered → Register:** the Register action is a design assumption. Confirm the unit supports it.

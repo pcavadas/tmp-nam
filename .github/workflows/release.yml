@@ -79,12 +79,15 @@ jobs:
         include:
           - platform: 'macos-latest'
             args: '--target aarch64-apple-darwin'
+            target: 'aarch64-apple-darwin'
             asset: 'macos_apple-silicon'
           - platform: 'macos-latest'
             args: '--target x86_64-apple-darwin'
+            target: 'x86_64-apple-darwin'
             asset: 'macos_intel'
           - platform: 'ubuntu-22.04'
             args: ''
+            target: 'x86_64-unknown-linux-gnu'
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -120,6 +123,21 @@ jobs:
       - name: install frontend dependencies
         working-directory: apps/desktop
         run: bun install --frozen-lockfile
+
+      # The card builder's e2fsprogs tools (built, then smoke-tested), bundled as sidecars
+      # (tauri.e2fsprogs.conf.json) and signed with the app.
+      - name: build the bundled e2fsprogs
+        env:
+          TARGET: ${{ matrix.target }}
+        run: tools/e2fsprogs/build.sh "$TARGET"
+
+      # GPLv2 section 3: the e2fsprogs source travels with the binaries (licenses/e2fsprogs/SOURCE).
+      - name: upload the e2fsprogs source
+        if: runner.os == 'Linux'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.release.outputs.tag }}
+        run: gh release upload "$TAG" apps/desktop/src-tauri/binaries/e2fsprogs-*.tar.xz --repo "$GITHUB_REPOSITORY" --clobber
 
       - name: Import Apple Developer Certificate
         if: runner.os == 'macOS'
@@ -168,7 +186,8 @@ jobs:
           # next step uploads the DMG.
           releaseId: ${{ runner.os == 'Linux' && needs.release.outputs.release_id || '' }}
           releaseAssetNamePattern: TMP-NAM_linux_[arch][ext]
-          args: ${{ matrix.args }}
+          # Absolute: tauri-action reads this config itself as well as passing it on.
+          args: ${{ matrix.args }} --config ${{ github.workspace }}/apps/desktop/src-tauri/tauri.e2fsprogs.conf.json
 
       - name: upload the DMG
         if: runner.os == 'macOS'

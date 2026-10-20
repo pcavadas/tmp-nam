@@ -18,6 +18,7 @@ or binary-analysis code here; `scripts/check.sh` enforces that with a grep.
 | App icon (gain knob): bundled files / sources and regeneration | `apps/desktop/src-tauri/icons/` / `apps/desktop/design/icons/` (never `tauri icon`) |
 | App backend: unit console, captures, Tone3000, Wi-Fi, SSH access, settings | `apps/desktop/src-tauri/src/{console,unit,hid,proto,wifi,ssh,t3k,variants,settings}.rs`, `unit_helper.py` |
 | SD-card builder | `crates/sdcard/src/` — `lib.rs` pipeline, `cli.rs` commands |
+| Bundled e2fsprogs (sidecars `tmp-nam-{mke2fs,debugfs,e2fsck}`) | `tools/e2fsprogs/build.sh`, `apps/desktop/src-tauri/tauri.e2fsprogs.conf.json` |
 | Everything copied onto the card + all pins | `device/`, `device/release.json` |
 | NAM player source and ARM build | `player/`; `docs/nam-player.md` |
 | Rebuild/publish the ARM binaries | `tools/release/`; `BUILDING.md` |
@@ -75,14 +76,19 @@ hash, stock files the builder patches (anchors + before/after hashes), every `de
   unit (boot, audio, switching). Non-binary assets (units, scripts, helpers) are re-pinned by
   updating their `release.json` entry with the file.
 
-Card builder pipeline (`crates/sdcard`): validate firmware → `unsquashfs` RAUC → inventory the
-rootfs tar (`firmware.rs`) → system `tar -xzpf` → `rootfs.rs` delta (CDC-ACM console in the
-USB gadget, drop `data=journal`, audio IRQs to CPU3, NAM/LAN assets, build marker) →
-`mke2fs -d` + `debugfs` ownership/mode fix-up + `e2fsck` + audit (`ext4.rs`) → image
-(`image.rs`: mformat/mcopy FAT, sfdisk MBR, readback) or card (`card.rs`: on macOS the image's
-MBR + FAT and the rootfs through one authopen(1) descriptor, on Linux sfdisk + mkfs.vfat; raw
-write, 4 GiB readback). Generated text files are in `templates.rs` and must stay
-byte-identical (the audit compares them).
+Card builder pipeline (`crates/sdcard`): validate firmware → read the RAUC SquashFS
+(`backhand`) → inventory the rootfs tar (`firmware.rs`) → system `tar -xzpf` → `rootfs.rs`
+delta (CDC-ACM console in the USB gadget, drop `data=journal`, audio IRQs to CPU3, NAM/LAN
+assets, build marker) → `mke2fs -d` (compiled-in defaults: `MKE2FS_CONFIG` names a missing
+file) + `debugfs` ownership/mode fix-up + `e2fsck` + audit (`ext4.rs`) → FAT32 boot partition
+(`fatfs`) + MBR (`mbrman`) in `image.rs` → image (readback) or card (`card.rs`: the same MBR +
+FAT and the rootfs through one raw descriptor — authopen(1) on macOS, an `O_EXCL` open as root
+on Linux — each read back, 4 GiB rootfs readback). Generated text files are in `templates.rs`
+and must stay byte-identical (the audit compares them). e2fsprogs is the only host-tool
+dependency: `locate_tool` takes the bundled `tmp-nam-<tool>` next to the binary first, then
+PATH/Homebrew; bundles get them from `tools/e2fsprogs/build.sh <triple>` + `--config
+src-tauri/tauri.e2fsprogs.conf.json` (CI `bundle` job, `release.yml`); dev builds and
+`cargo test` don't need them.
 
 App ↔ unit: the card's root shell — the CDC-ACM tty under the USB device with the TMP's
 VID/PID `0x1ED8`/`0x44` (same IDs TMP Companion uses), found via `ioreg`/sysfs (`console.rs`). Commands are

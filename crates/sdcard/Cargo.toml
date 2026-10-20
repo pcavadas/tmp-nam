@@ -24,6 +24,11 @@ tar = "0.4"
 flate2 = "1"
 uuid = { version = "1", features = ["v4"] }
 tempfile = "3"
+# The card layout without host tools: the RAUC SquashFS (gzip, the pinned firmware's
+# compression), the FAT32 boot partition and the MBR.
+backhand = { version = "0.25.5", default-features = false, features = ["gzip"] }
+fatfs = "0.3.6"
+mbrman = "0.6.1"
 
 [dev-dependencies]
 glob = "0.3"

@@ -335,7 +335,11 @@ pub fn create(
     let uuid = marker["rootfs_uuid"]
         .as_str()
         .ok_or_else(|| Error::msg("marker has no rootfs_uuid"))?;
+    // A missing configuration file makes mke2fs (and e2fsck) use compiled-in defaults
+    // instead of whatever mke2fs.conf/e2fsck.conf the host carries (mke2fs.c, profile setup).
+    let config = output.with_extension("missing.conf");
     run!(
+        env &[("MKE2FS_CONFIG", config.as_path())];
         mke2fs,
         "-t",
         "ext4",
@@ -361,7 +365,11 @@ pub fn create(
     )?;
     normalize_ownership(&debugfs, output, records, ext4.inode_count)?;
     restore_special_modes(&debugfs, output, records)?;
-    let fsck = Command::new(&e2fsck).arg("-fy").arg(output).output()?;
+    let fsck = Command::new(&e2fsck)
+        .env("E2FSCK_CONFIG", &config)
+        .arg("-fy")
+        .arg(output)
+        .output()?;
     let code = fsck.status.code().unwrap_or(-1);
     if code != 0 && code != 1 {
         return bail(format!(
