@@ -110,6 +110,11 @@ sudo target/release/tmp-sdcard write <firmware.img> --device /dev/diskN
 
 Validate on a machine where physical media must not be touched with `image` only.
 
+On Linux the app writes cards through pkexec. An AppImage's files sit in the user's
+FUSE mount, which root can't open, so root runs the AppImage file with the runtime's
+`--appimage-extract-and-run` (extracted under the app's private temporary directory)
+and the helper reads `device/` from that extraction.
+
 ## The release pins (`device/release.json`)
 
 `device/release.json` is the single source of truth for what goes on the card:

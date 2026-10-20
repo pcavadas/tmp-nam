@@ -4,7 +4,8 @@
 //! `--sdcard-helper write` mode. On macOS it runs as the user and its output is
 //! read directly; it asks for the raw disk itself through authopen(1) (the
 //! administrator prompt, see `tmp_sdcard::card::open`). On Linux it runs as root
-//! through `pkexec` and writes to a log file that is tailed. (Portable image files
+//! through `pkexec` and writes to a log file that is tailed; an AppImage's root
+//! helper runs from its own extraction (`elevated_command`). (Portable image files
 //! are a `tmp-sdcard image` CLI feature; the app only writes cards.)
 //!
 //! The helper prints one JSON object per line (`tmp_sdcard::util::JsonReporter`).
@@ -374,8 +375,41 @@ pub fn write_card(app: tauri::AppHandle, firmware: String, device: String) -> Re
     if cfg!(target_os = "macos") {
         run_streamed(app, &exe, &args)
     } else {
-        run_elevated(app, &exe, &args)
+        #[cfg(target_os = "linux")]
+        let (exe, args, appimage) = elevated_command(&app, exe, args);
+        #[cfg(not(target_os = "linux"))]
+        let appimage = false;
+        run_elevated(app, &exe, &args, appimage)
     }
+}
+
+/// Linux: the helper command run as root, and whether it is an AppImage's. An
+/// AppImage's files sit in the user's FUSE mount, which no other user can open,
+/// root included, so root runs the AppImage file itself with the runtime's
+/// `--appimage-extract-and-run` and gets `--device-dir` relative to the AppImage
+/// root, which the helper resolves against its own extraction (`main.rs`).
+#[cfg(target_os = "linux")]
+fn elevated_command(
+    app: &tauri::AppHandle,
+    exe: PathBuf,
+    mut args: Vec<String>,
+) -> (PathBuf, Vec<String>, bool) {
+    let env = app.env();
+    let (Some(appimage), Some(appdir)) = (env.appimage, env.appdir) else {
+        return (exe, args, false);
+    };
+    let appdir = std::fs::canonicalize(&appdir).unwrap_or_else(|_| appdir.into());
+    if let Some(dir) = args
+        .iter()
+        .position(|a| a == "--device-dir")
+        .and_then(|i| args.get_mut(i + 1))
+    {
+        if let Ok(rel) = Path::new(dir.as_str()).strip_prefix(&appdir) {
+            *dir = rel.to_string_lossy().into_owned();
+        }
+    }
+    args.insert(0, "--appimage-extract-and-run".into());
+    (appimage.into(), args, true)
 }
 
 /// macOS: run the helper as the user and read its output as it comes.
@@ -413,7 +447,12 @@ fn run_streamed(app: tauri::AppHandle, exe: &Path, args: &[String]) -> Result<()
 
 /// Linux: run the helper as root through pkexec, which doesn't stream, so the
 /// helper writes to a log file that is tailed.
-fn run_elevated(app: tauri::AppHandle, exe: &Path, args: &[String]) -> Result<(), String> {
+fn run_elevated(
+    app: tauri::AppHandle,
+    exe: &Path,
+    args: &[String],
+    appimage: bool,
+) -> Result<(), String> {
     // Private, randomly named 0700 directory for the log/status files. The
     // elevated command is passed inline (no script file) so nothing in a shared
     // location can be swapped between this point and the administrator prompt.
@@ -430,8 +469,21 @@ fn run_elevated(app: tauri::AppHandle, exe: &Path, args: &[String]) -> Result<()
         .map(|a| sh_quote(&a))
         .collect::<Vec<_>>()
         .join(" ");
+    // The AppImage runtime extracts to $TMPDIR/appimage_extracted_<md5>, reusing
+    // files already there, and pkexec resets TMPDIR to the shared /tmp: extract
+    // into the private directory instead, and remove the root-owned extraction
+    // before the status file is written (the runtime can leave it behind).
+    let (cmd, cleanup) = if appimage {
+        let extract = sh_quote(&work.join("appimage").to_string_lossy());
+        (
+            format!("TMPDIR={extract} {cmd}"),
+            format!("rm -rf {extract}; "),
+        )
+    } else {
+        (cmd, String::new())
+    };
     let shell = format!(
-        "{cmd} > {log} 2>&1; echo $? > {status}",
+        "{cmd} > {log} 2>&1; s=$?; {cleanup}echo $s > {status}",
         log = sh_quote(&log.to_string_lossy()),
         status = sh_quote(&status_file.to_string_lossy()),
     );

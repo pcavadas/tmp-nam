@@ -142,7 +142,9 @@ The app binary doubles as the card builder: `--sdcard-helper image|write|list|ve
 (`apps/desktop/src-tauri/src/main.rs`), unprivileged for images. For physical cards it runs as the
 user on macOS and opens the raw disk through authopen(1) (the admin prompt; a root process from
 `osascript … with administrator privileges` is denied removable volumes by TCC), and as root via
-pkexec on Linux; it prints JSON progress lines the GUI reads.
+pkexec on Linux; it prints JSON progress lines the GUI reads. Root can't open the user's AppImage
+FUSE mount, so an AppImage's root helper is `"$APPIMAGE" --appimage-extract-and-run`, extracted
+under the private log directory (`TMPDIR`), with `--device-dir` relative to its APPDIR.
 
 ## Shell notes
 
