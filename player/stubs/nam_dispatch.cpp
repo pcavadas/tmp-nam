@@ -69,15 +69,15 @@ extern "C" {
 // SHA-256 of the tm-stomp-server this stub was derived against. The
 // constructor refuses to install trampolines unless /proc/self/exe matches.
 #define TMP_1858_SHA \
-  "e8f09d53662de56771f1cf76bb81835da86673a38bde5cdf9cb8ea82d94f2d38"
+  "5587dba046fa3445a600df7b109cd6576dd84c3f7b5db06c715328a89dcbdb56"
 
 namespace {
 // Confirmed 1.8.58 VAs (were 1.7.75: loadFile 0x55f2b0, process 0x6d6b20,
 // ctor 0x95ef00 — every one moved ~525 KB; deploying the old values would
 // trampoline arbitrary code, which is exactly what the SHA gate prevents).
-constexpr uintptr_t kLoadFileVA = 0x9a47c0;  // IRProcessor::loadFile(this,path)
-constexpr uintptr_t kProcessVA  = 0x9a5200;  // process(this,in,out,nframes)
-constexpr uintptr_t kDtorVA     = 0x9a3ae0;  // IRProcessor D1; see versioned recon
+constexpr uintptr_t kLoadFileVA = 0x9a5120;  // IRProcessor::loadFile(this,path)
+constexpr uintptr_t kProcessVA  = 0x9a5b60;  // process(this,in,out,nframes)
+constexpr uintptr_t kDtorVA     = 0x9a4440;  // IRProcessor D1; see versioned recon
 }  // namespace
 
 // ---------------------------------------------------------------------------

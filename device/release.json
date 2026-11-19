@@ -1,22 +1,22 @@
 {
   "schema": "tmp-nam-release-v2",
   "firmware": {
-    "bytes": 564635158,
-    "sha256": "392dd4a2a1109b2ff9590610fa4c0f403c9d702d049692476d7f7b84f41f38ec",
+    "bytes": 566343190,
+    "sha256": "1a221db36d423ca369b603d3c797341550b99c8fd2b5d747e42336d7b7ec1441",
     "compatible": "tone-master-stomp",
     "payload": {
       "name": "fmic-image-manufacturing-tone-master-stomp-hihope-rzg2h.tar.gz",
-      "bytes": 566177742,
-      "sha256": "584ae1b7559ecc66487234d371773d7da184c8604d5d6bb4abec994542a8f4e6"
+      "bytes": 567885511,
+      "sha256": "c61c98a119f9194dc83d65028d2c51980416233a711e45327b4e47a9c790c181"
     }
   },
-  "engine_sha256": "e8f09d53662de56771f1cf76bb81835da86673a38bde5cdf9cb8ea82d94f2d38",
+  "engine_sha256": "5587dba046fa3445a600df7b109cd6576dd84c3f7b5db06c715328a89dcbdb56",
   "boot": {
     "image": {
       "rootfs_path": "boot/Image",
       "fat_name": "Image",
       "bytes": 15948288,
-      "sha256": "7ea4b5c96a065e24cbba033568068355425ea672e57316d3e325c469014a9605"
+      "sha256": "a5ba8428d9c009182ca5de7d5021deecc9005579c6a66b5be45282101f6b1738"
     },
     "dtb": {
       "rootfs_path": "boot/fmic-tm-stomp.dtb",
@@ -30,7 +30,7 @@
       "source": "bin/nam_dispatch.so",
       "target": "usr/local/lib/nam_dispatch.so",
       "bytes": 1971296,
-      "sha256": "efcc31677743a42fcda1b9732b7c4abfb31f0937178a89f285b61e49885a76e1"
+      "sha256": "abd8a5edc2b42151ac6f8f62f19f705ff5fda3eb0bc337f754f59a94024a63be"
     },
     "registry_helper": {
       "source": "helpers/register_nam_ir.py",
@@ -164,7 +164,7 @@
     "player/nam_registry.h": "43358bc872ecc06034fc245ac956fbe9162e915c943c2f63c1c5d300c0254c8c",
     "player/nam_sha256.h": "028c31ff92dd56a5813be0727a344e009fa9c3c5b2e6ded9e77ffc4e3c3473d9",
     "player/patches/model.cpp.patch": "ada70ac1380c367babe5e973528b4de776433b8899b40e4d14d8a7e09125347d",
-    "player/stubs/nam_dispatch.cpp": "358030601f14078402c4b89ecbb834056b611eaefafc7f79ccb6c4ebba9c7241",
+    "player/stubs/nam_dispatch.cpp": "f47924483370e49dd187d6086c952845f5871bcface34a3ab5d13c3459b4bca4",
     "player/stubs/nam_dispatch.map": "5840a16197f6f8f1159aac06c895d050da9272fe29932a074fca277ba1296429",
     "player/stubs/nam_dispatch_trampoline.c": "d3af2e2bbe2c321c243718914823e6fbdde9061c6c9b6c1aefdf6ff6332c14ab",
     "player/stubs/nam_dispatch_trampoline.h": "2e752f2ab623de4b2aaa4d1f797382698c31c669ff9dd4bfc8caa37733c65335",
@@ -196,7 +196,7 @@
       "player/nam_registry.h": "43358bc872ecc06034fc245ac956fbe9162e915c943c2f63c1c5d300c0254c8c",
       "player/nam_sha256.h": "028c31ff92dd56a5813be0727a344e009fa9c3c5b2e6ded9e77ffc4e3c3473d9",
       "player/patches/model.cpp.patch": "ada70ac1380c367babe5e973528b4de776433b8899b40e4d14d8a7e09125347d",
-      "player/stubs/nam_dispatch.cpp": "358030601f14078402c4b89ecbb834056b611eaefafc7f79ccb6c4ebba9c7241",
+      "player/stubs/nam_dispatch.cpp": "f47924483370e49dd187d6086c952845f5871bcface34a3ab5d13c3459b4bca4",
       "player/stubs/nam_dispatch.map": "5840a16197f6f8f1159aac06c895d050da9272fe29932a074fca277ba1296429",
       "player/stubs/nam_dispatch_trampoline.c": "d3af2e2bbe2c321c243718914823e6fbdde9061c6c9b6c1aefdf6ff6332c14ab",
       "player/stubs/nam_dispatch_trampoline.h": "2e752f2ab623de4b2aaa4d1f797382698c31c669ff9dd4bfc8caa37733c65335",
