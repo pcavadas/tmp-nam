@@ -81,3 +81,33 @@ fn licenses_match_release() {
         assert_eq!(&sha(&dir.join(name)), want, "license {name}");
     }
 }
+
+#[test]
+fn dispatcher_knows_every_pinned_engine() {
+    let release = Release::embedded();
+    let stub = std::fs::read_to_string(repo().join("player/stubs/nam_dispatch.cpp")).unwrap();
+    assert!(!release.firmwares.is_empty());
+    for fw in &release.firmwares {
+        let row = format!("{{\"{}\", \"{}\",", fw.version, fw.engine_sha256);
+        assert!(
+            stub.contains(&row),
+            "nam_dispatch.cpp has no kEngines row for firmware {} (engine {})",
+            fw.version,
+            fw.engine_sha256
+        );
+    }
+}
+
+#[test]
+fn firmware_pins_are_distinct() {
+    let release = Release::embedded();
+    let mut seen = std::collections::BTreeSet::new();
+    for fw in &release.firmwares {
+        assert!(seen.insert(fw.version.clone()), "duplicate {}", fw.version);
+        assert!(seen.insert(fw.sha256.clone()), "duplicate firmware hash");
+        assert!(
+            seen.insert(fw.engine_sha256.clone()),
+            "duplicate engine hash"
+        );
+    }
+}

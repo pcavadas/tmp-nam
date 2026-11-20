@@ -8,23 +8,28 @@ use std::path::{Path, PathBuf};
 
 use backhand::{FilesystemReader, InnerNode};
 
-use crate::release::Release;
+use crate::release::{Firmware, Release};
 use crate::run;
 use crate::util::{bail, locate_tool, sha256_file, Error, Result};
 
-pub fn validate_firmware(path: &Path, release: &Release) -> Result<String> {
-    let fw = &release.firmware;
+/// The supported firmware `path` is, by size and then SHA-256.
+pub fn validate_firmware(path: &Path, release: &Release) -> Result<Firmware> {
     if !path.is_file() {
         return bail(format!("firmware file does not exist: {}", path.display()));
     }
-    if std::fs::metadata(path)?.len() != fw.bytes {
-        return bail("firmware size does not match supported 1.8.58 image");
+    let versions = release.firmware_versions();
+    if !release.firmware_size_known(std::fs::metadata(path)?.len()) {
+        return bail(format!(
+            "firmware size does not match a supported image ({versions})"
+        ));
     }
     let digest = sha256_file(path, None, 0, None)?;
-    if digest != fw.sha256 {
-        return bail("firmware SHA-256 does not match supported 1.8.58 image");
+    match release.firmware(&digest) {
+        Some(fw) => Ok(fw.clone()),
+        None => bail(format!(
+            "firmware SHA-256 does not match a supported image ({versions})"
+        )),
     }
-    Ok(digest)
 }
 
 /// Minimal INI reader for `manifest.raucm` (sections + `key=value`, no interpolation).
@@ -49,7 +54,7 @@ pub fn parse_ini(text: &str) -> Vec<(String, String, String)> {
     out
 }
 
-pub fn check_rauc_manifest(path: &Path, release: &Release) -> Result<()> {
+pub fn check_rauc_manifest(path: &Path, fw: &Firmware) -> Result<()> {
     let text = std::fs::read_to_string(path)?;
     let entries = parse_ini(&text);
     let get = |s: &str, k: &str| {
@@ -60,7 +65,6 @@ pub fn check_rauc_manifest(path: &Path, release: &Release) -> Result<()> {
             .map(|(_, _, v)| v.as_str())
             .unwrap_or("")
     };
-    let fw = &release.firmware;
     if get("update", "compatible") != fw.compatible {
         return bail("unexpected RAUC compatible value");
     }
@@ -77,7 +81,7 @@ pub fn check_rauc_manifest(path: &Path, release: &Release) -> Result<()> {
 }
 
 /// Unpack the RAUC SquashFS and return the verified payload path.
-pub fn unpack_bundle(firmware: &Path, work: &Path, release: &Release) -> Result<PathBuf> {
+pub fn unpack_bundle(firmware: &Path, work: &Path, fw: &Firmware) -> Result<PathBuf> {
     let squashfs = work.join("squashfs-root");
     std::fs::create_dir_all(&squashfs)?;
     let bundle = FilesystemReader::from_reader(BufReader::new(File::open(firmware)?))
@@ -105,18 +109,15 @@ pub fn unpack_bundle(firmware: &Path, work: &Path, release: &Release) -> Result<
         names.push(name);
     }
     let manifest = squashfs.join("manifest.raucm");
-    let payload = squashfs.join(&release.firmware.payload.name);
+    let payload = squashfs.join(&fw.payload.name);
     names.sort();
-    let mut expected = vec![
-        "manifest.raucm".to_string(),
-        release.firmware.payload.name.clone(),
-    ];
+    let mut expected = vec!["manifest.raucm".to_string(), fw.payload.name.clone()];
     expected.sort();
     if names != expected {
         return bail("unexpected files in RAUC SquashFS");
     }
-    check_rauc_manifest(&manifest, release)?;
-    if std::fs::metadata(&payload)?.len() != release.firmware.payload.bytes {
+    check_rauc_manifest(&manifest, fw)?;
+    if std::fs::metadata(&payload)?.len() != fw.payload.bytes {
         return bail("extracted rootfs payload size mismatch");
     }
     Ok(payload)

@@ -6,7 +6,7 @@ labels: bug
 
 <!-- Hardware reports are hard to act on without the versions below — please fill them in. -->
 
-**Unit firmware** (must be 1.8.58):
+**Unit firmware** (must be 1.8.58 or 1.8.85):
 
 **TMP NAM version** (in Settings › Unit › Copy Diagnostics):
 

@@ -8,7 +8,7 @@ use fatfs::{FatType, FileSystem, FormatVolumeOptions, FsOptions};
 use mbrman::{MBRPartitionEntry, BOOT_INACTIVE, CHS, MBR};
 use sha2::{Digest, Sha256};
 
-use crate::release::{Pin, Release};
+use crate::release::{Boot, Pin, Release};
 use crate::rootfs::resolve_inside;
 use crate::util::{assert_file, bail, hex, write_all, Error, Reporter, Result, CHUNK_BYTES};
 
@@ -117,9 +117,9 @@ fn mbr_error(e: mbrman::Error) -> Error {
 }
 
 /// Verify and copy the official kernel + DTB out of the rootfs.
-pub fn boot_files(rootfs: &Path, release: &Release) -> Result<Vec<BootEntry>> {
+pub fn boot_files(rootfs: &Path, boot: &Boot) -> Result<Vec<BootEntry>> {
     let mut out = vec![];
-    for f in [&release.boot.image, &release.boot.dtb] {
+    for f in [&boot.image, &boot.dtb] {
         let p = resolve_inside(rootfs, &f.rootfs_path)?;
         assert_file(&p, &f.pin())?;
         out.push((p, f.fat_name.clone(), f.pin()));
@@ -130,8 +130,8 @@ pub fn boot_files(rootfs: &Path, release: &Release) -> Result<Vec<BootEntry>> {
 /// A boot partition file: its source, its FAT name and its pin.
 pub type BootEntry = (PathBuf, String, Pin);
 
-pub fn create_boot_fat(rootfs: &Path, output: &Path, release: &Release) -> Result<()> {
-    write_boot_fat(&boot_files(rootfs, release)?, output, release)
+pub fn create_boot_fat(rootfs: &Path, output: &Path, boot: &Boot, release: &Release) -> Result<()> {
+    write_boot_fat(&boot_files(rootfs, boot)?, output, release)
 }
 
 /// Format partition 1 at `output` as FAT32, copy `files` in and read them back

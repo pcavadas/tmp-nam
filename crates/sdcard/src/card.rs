@@ -9,7 +9,6 @@
 
 use std::fs::File;
 use std::io::{Seek, SeekFrom};
-use std::path::Path;
 use std::process::Command;
 
 use serde::Serialize;
@@ -529,16 +528,15 @@ fn flush_for_readback(disk: &File) -> Result<()> {
 fn prepare(
     target: &DeviceInfo,
     mut disk: File,
-    rootfs: &Path,
-    image: &Path,
-    sha: &str,
+    built: &crate::Prepared,
     release: &Release,
     r: &dyn Reporter,
 ) -> Result<()> {
+    let (rootfs, image, sha) = (&built.rootfs, &built.image, &built.sha256);
     let l = &release.layout;
     r.progress("Preparing partitions", 0, 1);
     let boot_fat = image.with_file_name("boot.fat");
-    create_boot_fat(rootfs, &boot_fat, release)?;
+    create_boot_fat(rootfs, &boot_fat, &built.firmware.boot, release)?;
     let head = image.with_file_name("card-head.img");
     assemble_head(&head, &boot_fat, target.bytes / l.sector_bytes, release)?;
     let head_bytes = l.partition_2.start_sector * l.sector_bytes;
@@ -573,7 +571,7 @@ fn prepare(
         Some(len),
         head_bytes,
         Some((r, "Verifying rootfs")),
-    )? != sha
+    )? != *sha
     {
         return bail("rootfs partition readback hash mismatch");
     }
@@ -613,7 +611,6 @@ pub fn write_prepared(
     release: &Release,
     r: &dyn Reporter,
 ) -> Result<()> {
-    let (rootfs, rootfs_image, rootfs_sha256) = (&built.rootfs, &built.image, &built.sha256);
     let target = device_info(device)?;
     if let Some(e) = expect {
         if e.logical != target.logical || e.bytes != target.bytes || e.model != target.model {
@@ -621,15 +618,7 @@ pub fn write_prepared(
         }
     }
     validate_capacity(&target, release)?;
-    prepare(
-        &target,
-        disk,
-        rootfs,
-        rootfs_image,
-        rootfs_sha256,
-        release,
-        r,
-    )
+    prepare(&target, disk, built, release, r)
 }
 
 #[cfg(test)]

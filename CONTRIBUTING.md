@@ -1,7 +1,7 @@
 # Contributing
 
 TMP NAM is a Tauri 2 app (Rust backend + React/TypeScript frontend) plus an SD-card builder and
-an ARM NAM player for the Fender Tone Master Pro (firmware 1.8.58 only). It runs on **macOS and
+an ARM NAM player for the Fender Tone Master Pro (firmware 1.8.58 or 1.8.85). It runs on **macOS and
 Linux**; Windows is not supported.
 
 - **Start here:** [`CLAUDE.md`](CLAUDE.md) — architecture, the unit protocol, and the invariants

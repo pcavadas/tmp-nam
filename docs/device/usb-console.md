@@ -2,7 +2,7 @@
 
 The card builder (the TMP NAM app's SD Card page, or `tmp-sdcard`) builds a removable NAM-ready SD system for a Fender
 Tone Master Pro (TMP). The unit keeps its factory bootloader and runs Fender's
-own 1.8.58 kernel, device tree, and userspace from the card. Minimal rootfs
+own official kernel, device tree, and userspace from the card. Minimal rootfs
 changes add an unauthenticated root shell to the existing USB composite gadget
 and load the firmware-matched NAM runtime. It ships no NAM captures; add your own
 from the app.
@@ -51,16 +51,19 @@ installs no captures. The USB shell still runs as UID 0 without a login or passw
 
 ## What remains stock and what changes
 
-The builder requires an unmodified `ToneMasterPro_v1_8_58.img`.
-It verifies every boot-critical input before building:
+The builder requires an unmodified `ToneMasterPro_v1_8_58.img` or `ToneMasterPro_v1_8_85.img`.
+It verifies every boot-critical input of that version before building:
 
 | Artifact | Bytes | SHA-256 |
 | --- | ---: | --- |
 | Official 1.8.58 bundle | 564,635,158 | `392dd4a2a1109b2ff9590610fa4c0f403c9d702d049692476d7f7b84f41f38ec` |
-| Rootfs tar payload | 566,177,742 | `584ae1b7559ecc66487234d371773d7da184c8604d5d6bb4abec994542a8f4e6` |
-| `Image` | 15,948,288 | `7ea4b5c96a065e24cbba033568068355425ea672e57316d3e325c469014a9605` |
-| `fmic-tm-stomp.dtb` | 60,066 | `f768ebe2fc97bb00a2c6a7d5afd91e3d94bcc60ece4c16011603b9f5a62bae53` |
-| `nam_dispatch.so` | 1,971,296 | `efcc31677743a42fcda1b9732b7c4abfb31f0937178a89f285b61e49885a76e1` |
+| 1.8.58 rootfs tar payload | 566,177,742 | `584ae1b7559ecc66487234d371773d7da184c8604d5d6bb4abec994542a8f4e6` |
+| 1.8.58 `Image` | 15,948,288 | `7ea4b5c96a065e24cbba033568068355425ea672e57316d3e325c469014a9605` |
+| Official 1.8.85 bundle | 566,343,190 | `1a221db36d423ca369b603d3c797341550b99c8fd2b5d747e42336d7b7ec1441` |
+| 1.8.85 rootfs tar payload | 567,885,511 | `c61c98a119f9194dc83d65028d2c51980416233a711e45327b4e47a9c790c181` |
+| 1.8.85 `Image` | 15,948,288 | `a5ba8428d9c009182ca5de7d5021deecc9005579c6a66b5be45282101f6b1738` |
+| `fmic-tm-stomp.dtb` (both) | 60,066 | `f768ebe2fc97bb00a2c6a7d5afd91e3d94bcc60ece4c16011603b9f5a62bae53` |
+| `nam_dispatch.so` | 1,971,296 | `a0493c204639fa9fe87e620745323a1990b52595caa34ec15d64bde55117508b` |
 
 The build transformation is:
 
@@ -162,8 +165,9 @@ Environment="TMP_NAM_DISPATCH_LOG=/tmp/nam_dispatch.log"
 Environment="TMP_NAM_DISPATCH_NO_MLOCK=1"
 ```
 
-The library is firmware-specific and is pinned to the official 1.8.58
-userspace. The process hook is installed lazily when a NAM User IR is selected;
+The library is firmware-specific: it carries the hook addresses of the 1.8.58
+and 1.8.85 engines and installs only on an engine whose SHA-256 matches one of
+them. The process hook is installed lazily when a NAM User IR is selected;
 the `NO_MLOCK` setting avoids a boot-time memory-locking problem. No NAM capture is loaded automatically at boot.
 
 The card does not include the SD auto-watcher or any NAM captures. Add models
@@ -269,7 +273,7 @@ such an environment.
 
 ## Requirements
 
-The only proprietary input is the official 1.8.58 bundle. NAM captures
+The only proprietary input is the official 1.8.58 or 1.8.85 bundle. NAM captures
 are not build inputs and are never tracked in this repository. The A1/A2
 `nam_dispatch.so` and the registry helper are.
 
@@ -411,10 +415,10 @@ For NAM readiness, also run:
 sha256sum /usr/local/lib/nam_dispatch.so
 pid=$(pidof tm-stomp-server)
 tr '\000' '\n' < /proc/$pid/environ | grep -E 'LD_PRELOAD|TMP_NAM_DISPATCH'
-grep -E 'MATCH 1.8.58|ARMED|NAM ready|NAM stats' /tmp/nam_dispatch.log
+grep -E 'MATCH 1.8.(58|85)|ARMED|NAM ready|NAM stats' /tmp/nam_dispatch.log
 ```
 
-The library hash must be `efcc31677743a42fcda1b9732b7c4abfb31f0937178a89f285b61e49885a76e1`.
+The library hash must be `a0493c204639fa9fe87e620745323a1990b52595caa34ec15d64bde55117508b`.
 Add a capture from the app, then select it only after the device has reached the
 preset screen and the log reports `NAM dispatch ARMED`. Loading should then
 show `NAM ready` with the expected model hash and size, followed by `NAM stats`
@@ -468,7 +472,7 @@ perform the first-boot checks, power-cycle checks, and card-removal stock boot.
 - **No removable card detected:** reconnect the reader, disconnect other
   removable disks, and rerun. Use `--device` only after checking the model and
   capacity independently.
-- **Firmware rejected:** use the unmodified official 1.8.58 image. Renaming a
+- **Firmware rejected:** use the unmodified official 1.8.58 or 1.8.85 image. Renaming a
   different bundle cannot satisfy the pinned size and hash.
 - **Required tool not found:** reinstall the app, or for the CLI install
   e2fsprogs as above and start a new terminal so PATH refreshes.

@@ -569,7 +569,7 @@ export function mockPick(extensions: string[]): string[] {
     return [
       flag("fail") === "wrongfile"
         ? "/Users/me/Downloads/ToneMasterPro_v1_9_02.img"
-        : "/Users/me/Downloads/ToneMasterPro_v1_8_58.img",
+        : "/Users/me/Downloads/ToneMasterPro_v1_8_85.img",
     ];
   return Object.keys(SAMPLE_FILES);
 }
@@ -830,7 +830,7 @@ export async function mockInvoke(
               : `/Applications/TMP NAM.app/Contents/MacOS/tmp-nam-${name}`,
         })),
         default_firmware: null,
-        firmware_sha256: "392dd4a2",
+        firmware_versions: ["1.8.58", "1.8.85"],
         platform: "macos",
       };
       return env;
@@ -838,11 +838,17 @@ export async function mockInvoke(
     case "sd_check_firmware": {
       await sleep(800);
       const path = args.path as string;
+      const version = path.endsWith("v1_8_58.img")
+        ? "1.8.58"
+        : path.endsWith("v1_8_85.img")
+          ? "1.8.85"
+          : null;
       return {
         path,
         bytes: 564635158,
         sha256: "392dd4a2",
-        matches: path.endsWith("v1_8_58.img"),
+        matches: version !== null,
+        version,
       };
     }
     case "sd_list_disks": {

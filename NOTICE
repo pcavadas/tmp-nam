@@ -9,7 +9,8 @@ This software is not produced, endorsed, or supported by Fender Musical
 Instruments Corporation.
 
 This repository contains no Fender firmware. The SD-card builder works only from
-the official ToneMasterPro_v1_8_58.img that each user obtains from Fender; the
+the official ToneMasterPro_v1_8_58.img or ToneMasterPro_v1_8_85.img that each
+user obtains from Fender; the
 card is assembled on the user's own machine and never redistributed.
 
 Third-party software shipped on the card (NeuralAmpModelerCore, Eigen, SpeexDSP,

@@ -357,7 +357,7 @@ describe("SD Card", () => {
     const create = screen.getByRole("button", { name: "Create SD Card…" });
     expect(create).toBeDisabled();
     await userEvent.click(screen.getByRole("button", { name: "Choose File…" }));
-    expect(await screen.findByText("Verified")).toBeInTheDocument();
+    expect(await screen.findByText("Verified 1.8.85")).toBeInTheDocument();
     await userEvent.click(
       screen.getByRole("radio", { name: /Generic STORAGE DEVICE/ }),
     );

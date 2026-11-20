@@ -51,11 +51,12 @@ def plan(build_dir):
     build_dir = build_dir.resolve()
     manifest = json.loads(regular_bytes(build_dir / "assets/manifest.json"))
     release = load_release()
-    if manifest.get("schema") != "tmp-player-build-v1":
+    if manifest.get("schema") != "tmp-player-build-v2":
         raise RuntimeError("Unsupported player build manifest")
-    if (manifest.get("firmware_sha256") != release["firmware"]["sha256"]
-            or manifest.get("engine_sha256") != release["engine_sha256"]):
-        raise RuntimeError("Build targets a different firmware/engine")
+    pinned = [{"sha256": fw["sha256"], "engine_sha256": fw["engine_sha256"]}
+              for fw in release["firmwares"]]
+    if manifest.get("firmwares") != pinned:
+        raise RuntimeError("Build targets different firmwares/engines")
     build = manifest.get("build") or {}
     if build.get("nam_build_pass") != "perf":
         raise RuntimeError("Release requires recorded perf build provenance")

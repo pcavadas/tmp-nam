@@ -1,7 +1,8 @@
 //! The release pins (`device/release.json`), compiled into the binary.
 //!
-//! Every input that reaches the card is pinned here by size and SHA-256: the official
-//! firmware and its rootfs payload, the stock files the builder patches, and each
+//! Every input that reaches the card is pinned here by size and SHA-256: each supported
+//! official firmware with its rootfs payload, engine and boot files, the stock files the
+//! builder patches, and each
 //! asset under `device/`. The pins are embedded at compile time so a bundled
 //! `device/` directory can never select different bytes than the binary was built for.
 
@@ -45,12 +46,17 @@ pub struct Payload {
     pub sha256: String,
 }
 
+/// One supported official firmware and the files the builder takes from it.
 #[derive(Deserialize, Clone, Debug)]
 pub struct Firmware {
+    pub version: String,
     pub bytes: u64,
     pub sha256: String,
     pub compatible: String,
     pub payload: Payload,
+    /// `home/root/tm-stomp-server` in the rootfs; `nam_dispatch.so` pins the same hash.
+    pub engine_sha256: String,
+    pub boot: Boot,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -165,9 +171,7 @@ pub struct Rootfs {
 #[derive(Deserialize, Clone, Debug)]
 pub struct Release {
     pub schema: String,
-    pub firmware: Firmware,
-    pub engine_sha256: String,
-    pub boot: Boot,
+    pub firmwares: Vec<Firmware>,
     pub assets: Assets,
     pub layout: Layout,
     pub ext4: Ext4,
@@ -181,8 +185,24 @@ pub struct Release {
 impl Release {
     pub fn embedded() -> Release {
         let r: Release = serde_json::from_str(RELEASE_JSON).expect("device/release.json is valid");
-        assert_eq!(r.schema, "tmp-nam-release-v2", "unsupported release schema");
+        assert_eq!(r.schema, "tmp-nam-release-v3", "unsupported release schema");
         r
+    }
+
+    /// The supported firmware with this bundle hash.
+    pub fn firmware(&self, sha256: &str) -> Option<&Firmware> {
+        self.firmwares.iter().find(|f| f.sha256 == sha256)
+    }
+
+    /// Whether a supported firmware has this size (checked before hashing).
+    pub fn firmware_size_known(&self, bytes: u64) -> bool {
+        self.firmwares.iter().any(|f| f.bytes == bytes)
+    }
+
+    /// The supported firmware versions, e.g. `1.8.58, 1.8.85`.
+    pub fn firmware_versions(&self) -> String {
+        let v: Vec<&str> = self.firmwares.iter().map(|f| f.version.as_str()).collect();
+        v.join(", ")
     }
 
     /// Smallest card that holds the layout: partition 2's start plus the 4 GiB rootfs.

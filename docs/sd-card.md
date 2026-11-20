@@ -1,6 +1,6 @@
 # TMP NAM SD card — create + first boot
 
-Boot a Fender Tone Master Pro (firmware **1.8.58 only**) from an SD card with a USB root console and the NAM player preinstalled. The card carries the ARM executables pinned in `device/release.json`.
+Boot a Fender Tone Master Pro (firmware **1.8.58** or **1.8.85**) from an SD card with a USB root console and the NAM player preinstalled. The card carries the ARM executables pinned in `device/release.json`.
 
 > Owner hardware only. Internal firmware partitions are not patched; removing
 > the card restores stock boot. While the card is booted, the USB console is an
@@ -24,9 +24,9 @@ Boot a Fender Tone Master Pro (firmware **1.8.58 only**) from an SD card with a 
 | `systemd/dropbear-nam.service` | SSH on the LAN. |
 | `helpers/register_nam_ir.py`, `helpers/t3k_sync.py` | User-IR registry helper; on-device Tone3000 pull (the Wi-Fi/SSH fallback to the app). |
 
-NOT included: the official `ToneMasterPro_v1_8_58.img` (564,635,158 B). Obtain it
-yourself from Fender's official 1.8.58 release. The builder refuses anything
-else (exact size + `sha256:392dd4a2…f41f38ec` enforced before it touches a card).
+NOT included: the official `ToneMasterPro_v1_8_58.img` or `ToneMasterPro_v1_8_85.img`. Obtain it yourself from
+Fender's official release. The builder refuses anything else (each version's exact
+size and SHA-256 from `device/release.json` are enforced before it touches a card).
 
 ## 1. Prerequisites
 
@@ -40,7 +40,7 @@ else (exact size + `sha256:392dd4a2…f41f38ec` enforced before it touches a car
 
 In **TMP NAM → SD Card**:
 
-1. **Firmware** — *Choose file…* and pick `ToneMasterPro_v1_8_58.img`. It must show *verified 1.8.58*.
+1. **Firmware** — *Choose file…* and pick `ToneMasterPro_v1_8_58.img` or `ToneMasterPro_v1_8_85.img`. It must show *Verified* with its version.
 2. **SD card** — insert the card; it appears in the list within a few seconds (refused disks show why). Select it.
 3. **Create card** — confirm the erase (device, model and size are shown), then enter the macOS administrator password (macOS may first ask to allow TMP NAM access to removable volumes). The app verifies every pinned input, extracts the firmware, builds the 4 GiB rootfs, writes the partition table and the boot partition with the official boot files, writes the rootfs and hashes all 4 GiB back from the card, then ejects it.
 

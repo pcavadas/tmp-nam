@@ -33,7 +33,8 @@ pub struct Environment {
     pub kit_error: Option<String>,
     pub tools: Vec<Tool>,
     pub default_firmware: Option<String>,
-    pub firmware_sha256: String,
+    /// Supported firmware versions, oldest first.
+    pub firmware_versions: Vec<String>,
     pub platform: String,
 }
 
@@ -43,6 +44,8 @@ pub struct Firmware {
     pub bytes: u64,
     pub sha256: String,
     pub matches: bool,
+    /// The supported firmware version the file is, when it matches.
+    pub version: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -142,11 +145,21 @@ pub fn environment(app: &tauri::AppHandle) -> Environment {
             .err()
             .map(|e| format!("Card assets failed verification: {e}")),
     };
-    let default_fw = std::env::var("HOME")
-        .ok()
-        .map(|h| PathBuf::from(h).join("Downloads/ToneMasterPro_v1_8_58.img"))
-        .filter(|p| p.is_file())
-        .map(|p| p.to_string_lossy().into_owned());
+    // Fender's download name for each version, newest first.
+    let default_fw = std::env::var("HOME").ok().and_then(|h| {
+        release
+            .firmwares
+            .iter()
+            .rev()
+            .map(|f| {
+                PathBuf::from(&h).join(format!(
+                    "Downloads/ToneMasterPro_v{}.img",
+                    f.version.replace('.', "_")
+                ))
+            })
+            .find(|p| p.is_file())
+            .map(|p| p.to_string_lossy().into_owned())
+    });
     Environment {
         kit_root: dir.map(|d| d.0.to_string_lossy().into_owned()),
         kit_error,
@@ -160,7 +173,11 @@ pub fn environment(app: &tauri::AppHandle) -> Environment {
             })
             .collect(),
         default_firmware: default_fw,
-        firmware_sha256: release.firmware.sha256,
+        firmware_versions: release
+            .firmwares
+            .iter()
+            .map(|f| f.version.clone())
+            .collect(),
         platform: std::env::consts::OS.into(),
     }
 }
@@ -169,12 +186,13 @@ pub fn check_firmware(path: &str) -> Result<Firmware, String> {
     let release = Release::embedded();
     let mut f = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
     let bytes = f.metadata().map_err(|e| e.to_string())?.len();
-    if bytes != release.firmware.bytes {
+    if !release.firmware_size_known(bytes) {
         return Ok(Firmware {
             path: path.into(),
             bytes,
             sha256: String::new(),
             matches: false,
+            version: None,
         });
     }
     let mut hasher = Sha256::new();
@@ -191,10 +209,12 @@ pub fn check_firmware(path: &str) -> Result<Firmware, String> {
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect();
+    let version = release.firmware(&sha256).map(|f| f.version.clone());
     Ok(Firmware {
         path: path.into(),
         bytes,
-        matches: sha256 == release.firmware.sha256,
+        matches: version.is_some(),
+        version,
         sha256,
     })
 }
