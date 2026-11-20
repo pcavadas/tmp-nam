@@ -1,9 +1,9 @@
 // nam_dispatch.so — Tier-1 inline NAM dispatch via LD_PRELOAD.
 // Design + status: docs/tmp-ir-slot-nam-tier1.md.
 //
-// Firmware target: 1.8.58 (owner's physical amp). All four IRProcessor VAs
-// are confirmed and pinned to the engine SHA below; a version gate refuses to
-// install on any other build. Recon: firmware/1.8.58/recon/irprocessor-derivation.md.
+// Firmware targets: 1.8.58 and 1.8.85. The IRProcessor VAs of each are pinned
+// to that firmware's engine SHA-256 (kEngines below); a version gate refuses to
+// install on any other build.
 // Deploy over serial via a /run systemd drop-in — see docs/tmp-nam-status.md.
 
 #define _GNU_SOURCE
@@ -58,26 +58,34 @@ extern "C" {
 }
 
 // ---------------------------------------------------------------------------
-// Firmware 1.8.58 recon targets (firmware/1.8.58/recon/irprocessor-derivation.md)
+// Supported engines (firmware 1.8.58 and 1.8.85)
 //
-// All four IRProcessor addresses are CONFIRMED for the owner's amp (1.8.58).
-// tm-stomp-server is non-PIE, image base 0x400000; va_to_addr() rebases to the
-// runtime load address. These MUST match the binary the version gate below
-// pins to — never trust them against a different build.
+// Each row pins one tm-stomp-server build by SHA-256 together with its three
+// IRProcessor entry VAs. tm-stomp-server is non-PIE, image base 0x400000;
+// va_to_addr() rebases to the runtime load address. A row's VAs are valid only
+// for the binary its hash names: the version gate below selects the row whose
+// hash matches /proc/self/exe and refuses to install anything otherwise.
+// device/release.json pins the same engine hashes per firmware.
 // ---------------------------------------------------------------------------
 
-// SHA-256 of the tm-stomp-server this stub was derived against. The
-// constructor refuses to install trampolines unless /proc/self/exe matches.
-#define TMP_1858_SHA \
-  "e8f09d53662de56771f1cf76bb81835da86673a38bde5cdf9cb8ea82d94f2d38"
-
 namespace {
-// Confirmed 1.8.58 VAs (were 1.7.75: loadFile 0x55f2b0, process 0x6d6b20,
-// ctor 0x95ef00 — every one moved ~525 KB; deploying the old values would
-// trampoline arbitrary code, which is exactly what the SHA gate prevents).
-constexpr uintptr_t kLoadFileVA = 0x9a47c0;  // IRProcessor::loadFile(this,path)
-constexpr uintptr_t kProcessVA  = 0x9a5200;  // process(this,in,out,nframes)
-constexpr uintptr_t kDtorVA     = 0x9a3ae0;  // IRProcessor D1; see versioned recon
+struct EngineTargets {
+  const char* firmware;   // firmware version the engine ships in
+  const char* sha256;     // SHA-256 of home/root/tm-stomp-server
+  uintptr_t load_file;    // IRProcessor::loadFile(this,path)
+  uintptr_t process;      // process(this,in,out,nframes)
+  uintptr_t dtor;         // IRProcessor D1
+};
+
+constexpr EngineTargets kEngines[] = {
+    {"1.8.58", "e8f09d53662de56771f1cf76bb81835da86673a38bde5cdf9cb8ea82d94f2d38",
+     0x9a47c0, 0x9a5200, 0x9a3ae0},
+    {"1.8.85", "5587dba046fa3445a600df7b109cd6576dd84c3f7b5db06c715328a89dcbdb56",
+     0x9a5120, 0x9a5b60, 0x9a4440},
+};
+
+// Set once by version_gate_ok() before any trampoline is installed.
+const EngineTargets* g_engine = nullptr;
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -158,28 +166,39 @@ bool self_sha256(char hex[65]) {
   return true;
 }
 
-// Returns true if the running engine matches the 1.8.58 recon key (or the gate
-// is explicitly overridden). Logs the verdict either way.
+// Selects the kEngines row for the running engine (or the row named by the
+// override) and returns true; logs the verdict either way.
 bool version_gate_ok() {
   char hex[65];
   if (!self_sha256(hex)) {
     logf("version gate: cannot hash self — refusing to install.");
     return false;
   }
-  bool match = std::strcmp(hex, TMP_1858_SHA) == 0;
-  logf("version gate: self sha256=%s (%s)", hex,
-       match ? "MATCH 1.8.58" : "MISMATCH");
-  if (match) return true;
-  if (const char* ov = std::getenv("TMP_NAM_DISPATCH_SKIP_VERSION_GATE")) {
-    if (ov[0]) {
-      logf("version gate: OVERRIDDEN via TMP_NAM_DISPATCH_SKIP_VERSION_GATE — "
-           "VAs assume 1.8.58; proceed only if you know the binary matches.");
+  for (const EngineTargets& e : kEngines) {
+    if (std::strcmp(hex, e.sha256) == 0) {
+      g_engine = &e;
+      logf("version gate: self sha256=%s (MATCH %s)", hex, e.firmware);
       return true;
     }
   }
-  logf("version gate FAILED — this is not the 1.8.58 tm-stomp-server these "
-       "VAs were derived against. NAM dispatch DISABLED. Set "
-       "TMP_NAM_DISPATCH_SKIP_VERSION_GATE=1 to override (unsafe).");
+  logf("version gate: self sha256=%s (MISMATCH)", hex);
+  if (const char* ov = std::getenv("TMP_NAM_DISPATCH_SKIP_VERSION_GATE")) {
+    for (const EngineTargets& e : kEngines) {
+      if (std::strcmp(ov, e.firmware) == 0) {
+        g_engine = &e;
+        logf("version gate: OVERRIDDEN via TMP_NAM_DISPATCH_SKIP_VERSION_GATE — "
+             "using the %s VAs; proceed only if you know the binary matches.",
+             e.firmware);
+        return true;
+      }
+    }
+    if (ov[0])
+      logf("version gate: override value '%s' names no supported firmware "
+           "(1.8.58, 1.8.85).", ov);
+  }
+  logf("version gate FAILED — this is not a supported tm-stomp-server "
+       "(firmware 1.8.58 or 1.8.85). NAM dispatch DISABLED. Set "
+       "TMP_NAM_DISPATCH_SKIP_VERSION_GATE=<firmware version> to override (unsafe).");
   return false;
 }
 
@@ -562,7 +581,7 @@ bool ensure_process_trampoline();
 // bookkeeping; the exact source type is not recovered from the binary.
 using loadfile_result_t = std::uint8_t;
 using loadfile_t = loadfile_result_t (*)(void*, void*);
-// Confirmed 1.8.58 ABI: void process(this, float* in, float* out,
+// Confirmed ABI (1.8.58 and 1.8.85): void process(this, float* in, float* out,
 // size_t nframes) → x0/x1/x2/x3. We still declare 8 GP params so the tail-call
 // through the saved prologue preserves x4..x7 untouched (harmless — the real
 // function ignores them).
@@ -946,7 +965,7 @@ bool selftest_trampoline() {
 bool ensure_process_trampoline() {
   if (!g_process_hook_enabled) return false;
   std::call_once(g_process_install_once, []() {
-    void* addr = reinterpret_cast<void*>(va_to_addr(kProcessVA));
+    void* addr = reinterpret_cast<void*>(va_to_addr(g_engine->process));
     int rc = tramp_install_atomic(&g_process_tramp, addr,
                            reinterpret_cast<void*>(process_handler));
     if (rc == TRAMP_INSTALL_ATOMIC_DEGRADED) {
@@ -954,16 +973,17 @@ bool ensure_process_trampoline() {
       logf("ERROR: process hook live but target RX restoration failed; NAM redirection disabled");
     }
     logf("LAZY tramp_install IRProcessor::process (VA 0x%lx → addr %p) rc=%d",
-         (unsigned long)kProcessVA, addr, rc);
+         (unsigned long)g_engine->process, addr, rc);
   });
   return g_process_tramp.target_addr != nullptr && !g_hook_degraded.load(std::memory_order_acquire);
 }
 
 void install_trampolines() {
-  // Layer 1 — version gate. These VAs are only valid for the exact 1.8.58
-  // tm-stomp-server they were derived against; on any other build they would
-  // trampoline arbitrary code. Refuse unless /proc/self/exe SHA-256 matches
-  // (override with TMP_NAM_DISPATCH_SKIP_VERSION_GATE=1 — unsafe).
+  // Layer 1 — version gate. Each kEngines row's VAs are only valid for the
+  // exact tm-stomp-server its hash names; on any other build they would
+  // trampoline arbitrary code. Refuse unless /proc/self/exe SHA-256 matches a
+  // row (override with TMP_NAM_DISPATCH_SKIP_VERSION_GATE=<firmware version>
+  // — unsafe).
   if (!version_gate_ok()) {
     logf("NAM dispatch DISABLED — version gate declined. No .text touched.");
     return;
@@ -985,12 +1005,11 @@ void install_trampolines() {
   // D1 is reached directly and through the deleting destructor. Patch only
   // its entry instruction; no prologue skipping or concurrent multiword writes.
   int dtor_rc = tramp_install_atomic(&g_dtor_tramp,
-      reinterpret_cast<void*>(va_to_addr(kDtorVA)), reinterpret_cast<void*>(irproc_dtor_handler));
+      reinterpret_cast<void*>(va_to_addr(g_engine->dtor)), reinterpret_cast<void*>(irproc_dtor_handler));
   logf("tramp_install IRProcessor::D1 rc=%d", dtor_rc);
   if (dtor_rc != 0) return;
 
-  // Confirmed 1.8.58 IRProcessor entries (see recon doc / constants at top).
-  uintptr_t loadfile_va = kLoadFileVA;
+  uintptr_t loadfile_va = g_engine->load_file;
   void* loadfile_addr = reinterpret_cast<void*>(va_to_addr(loadfile_va));
 
   if (std::getenv("TMP_NAM_DISPATCH_DISABLE_LOADFILE") == nullptr) {

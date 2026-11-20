@@ -167,7 +167,8 @@ export interface SdEnvironment {
   kit_error?: string | null;
   tools: SdTool[];
   default_firmware?: string | null;
-  firmware_sha256?: string | null;
+  /** Supported firmware versions, oldest first. */
+  firmware_versions?: string[];
   platform: string;
 }
 
@@ -184,6 +185,7 @@ export interface FirmwareCheck {
   bytes: number;
   sha256: string;
   matches: boolean;
+  version?: string | null;
 }
 
 export interface SdLog {

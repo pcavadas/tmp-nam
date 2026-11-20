@@ -1,6 +1,6 @@
 # NAM A1/A2 on the TMP SD card
 
-The card builder (`crates/sdcard`, used by the TMP NAM app) builds the firmware 1.8.58 SD-root card with the USB root console
+The card builder (`crates/sdcard`, used by the TMP NAM app) builds the firmware 1.8.58/1.8.85 SD-root card with the USB root console
 and one pinned NAM dispatcher. There is no player selector, automatic model
 downgrade, or startup NAM preset.
 
@@ -147,7 +147,7 @@ bytes get new hashes and need a check on the unit before they are trusted.
 
 ## Build the SD-card image
 
-Supply the unmodified official `ToneMasterPro_v1_8_58.img`. Portable mode uses
+Supply the unmodified official `ToneMasterPro_v1_8_58.img` or `ToneMasterPro_v1_8_85.img`. Portable mode uses
 standard host filesystem tools and requires neither Docker nor disk mounting:
 
 ```sh

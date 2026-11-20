@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Scope
 
 NAM (neural amp model) playback for the owner's Fender Tone Master Pro (firmware 1.8.58
-only) and the **TMP NAM** desktop app: manage captures on the unit, Tone3000 sync, and
+or 1.8.85) and the **TMP NAM** desktop app: manage captures on the unit, Tone3000 sync, and
 the bootable SD-card builder. There is no exploit-development, firmware reverse-engineering
 or binary-analysis code here; `scripts/check.sh` enforces that with a grep.
 

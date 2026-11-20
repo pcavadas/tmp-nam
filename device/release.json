@@ -1,36 +1,65 @@
 {
-  "schema": "tmp-nam-release-v2",
-  "firmware": {
-    "bytes": 564635158,
-    "sha256": "392dd4a2a1109b2ff9590610fa4c0f403c9d702d049692476d7f7b84f41f38ec",
-    "compatible": "tone-master-stomp",
-    "payload": {
-      "name": "fmic-image-manufacturing-tone-master-stomp-hihope-rzg2h.tar.gz",
-      "bytes": 566177742,
-      "sha256": "584ae1b7559ecc66487234d371773d7da184c8604d5d6bb4abec994542a8f4e6"
-    }
-  },
-  "engine_sha256": "e8f09d53662de56771f1cf76bb81835da86673a38bde5cdf9cb8ea82d94f2d38",
-  "boot": {
-    "image": {
-      "rootfs_path": "boot/Image",
-      "fat_name": "Image",
-      "bytes": 15948288,
-      "sha256": "7ea4b5c96a065e24cbba033568068355425ea672e57316d3e325c469014a9605"
+  "schema": "tmp-nam-release-v3",
+  "firmwares": [
+    {
+      "version": "1.8.58",
+      "bytes": 564635158,
+      "sha256": "392dd4a2a1109b2ff9590610fa4c0f403c9d702d049692476d7f7b84f41f38ec",
+      "compatible": "tone-master-stomp",
+      "payload": {
+        "name": "fmic-image-manufacturing-tone-master-stomp-hihope-rzg2h.tar.gz",
+        "bytes": 566177742,
+        "sha256": "584ae1b7559ecc66487234d371773d7da184c8604d5d6bb4abec994542a8f4e6"
+      },
+      "engine_sha256": "e8f09d53662de56771f1cf76bb81835da86673a38bde5cdf9cb8ea82d94f2d38",
+      "boot": {
+        "image": {
+          "rootfs_path": "boot/Image",
+          "fat_name": "Image",
+          "bytes": 15948288,
+          "sha256": "7ea4b5c96a065e24cbba033568068355425ea672e57316d3e325c469014a9605"
+        },
+        "dtb": {
+          "rootfs_path": "boot/fmic-tm-stomp.dtb",
+          "fat_name": "fmic-tm-stomp.dtb",
+          "bytes": 60066,
+          "sha256": "f768ebe2fc97bb00a2c6a7d5afd91e3d94bcc60ece4c16011603b9f5a62bae53"
+        }
+      }
     },
-    "dtb": {
-      "rootfs_path": "boot/fmic-tm-stomp.dtb",
-      "fat_name": "fmic-tm-stomp.dtb",
-      "bytes": 60066,
-      "sha256": "f768ebe2fc97bb00a2c6a7d5afd91e3d94bcc60ece4c16011603b9f5a62bae53"
+    {
+      "version": "1.8.85",
+      "bytes": 566343190,
+      "sha256": "1a221db36d423ca369b603d3c797341550b99c8fd2b5d747e42336d7b7ec1441",
+      "compatible": "tone-master-stomp",
+      "payload": {
+        "name": "fmic-image-manufacturing-tone-master-stomp-hihope-rzg2h.tar.gz",
+        "bytes": 567885511,
+        "sha256": "c61c98a119f9194dc83d65028d2c51980416233a711e45327b4e47a9c790c181"
+      },
+      "engine_sha256": "5587dba046fa3445a600df7b109cd6576dd84c3f7b5db06c715328a89dcbdb56",
+      "boot": {
+        "image": {
+          "rootfs_path": "boot/Image",
+          "fat_name": "Image",
+          "bytes": 15948288,
+          "sha256": "a5ba8428d9c009182ca5de7d5021deecc9005579c6a66b5be45282101f6b1738"
+        },
+        "dtb": {
+          "rootfs_path": "boot/fmic-tm-stomp.dtb",
+          "fat_name": "fmic-tm-stomp.dtb",
+          "bytes": 60066,
+          "sha256": "f768ebe2fc97bb00a2c6a7d5afd91e3d94bcc60ece4c16011603b9f5a62bae53"
+        }
+      }
     }
-  },
+  ],
   "assets": {
     "nam_dispatch": {
       "source": "bin/nam_dispatch.so",
       "target": "usr/local/lib/nam_dispatch.so",
       "bytes": 1971296,
-      "sha256": "efcc31677743a42fcda1b9732b7c4abfb31f0937178a89f285b61e49885a76e1"
+      "sha256": "a0493c204639fa9fe87e620745323a1990b52595caa34ec15d64bde55117508b"
     },
     "registry_helper": {
       "source": "helpers/register_nam_ir.py",
@@ -164,7 +193,7 @@
     "player/nam_registry.h": "43358bc872ecc06034fc245ac956fbe9162e915c943c2f63c1c5d300c0254c8c",
     "player/nam_sha256.h": "028c31ff92dd56a5813be0727a344e009fa9c3c5b2e6ded9e77ffc4e3c3473d9",
     "player/patches/model.cpp.patch": "ada70ac1380c367babe5e973528b4de776433b8899b40e4d14d8a7e09125347d",
-    "player/stubs/nam_dispatch.cpp": "358030601f14078402c4b89ecbb834056b611eaefafc7f79ccb6c4ebba9c7241",
+    "player/stubs/nam_dispatch.cpp": "b32c3b4a1261a43db58aa281f8ca04b2af7ba110d2a9744525687b7326f8fc6a",
     "player/stubs/nam_dispatch.map": "5840a16197f6f8f1159aac06c895d050da9272fe29932a074fca277ba1296429",
     "player/stubs/nam_dispatch_trampoline.c": "d3af2e2bbe2c321c243718914823e6fbdde9061c6c9b6c1aefdf6ff6332c14ab",
     "player/stubs/nam_dispatch_trampoline.h": "2e752f2ab623de4b2aaa4d1f797382698c31c669ff9dd4bfc8caa37733c65335",
@@ -174,7 +203,7 @@
     "player/toolchains/messense-v1.1.0.json": "60a97f7f1e76a30fcd6e1c2aca66e4cb40194b78afdc7546f49e2e6ca77d7866"
   },
   "build": {
-    "git_revision": "8de23a0969cc9361e4336c07ab8290a6087e4ef9",
+    "git_revision": "810dbea25f1a7068bc21ff5c78151d02cc33f8f8",
     "nam_build_pass": "perf",
     "source_sha256": {
       "player/bootstrap_nam_deps.sh": "0b066055b3382ddf6736400c2c0af04835741ee43ae2a65775a971a482e0074a",
@@ -196,7 +225,7 @@
       "player/nam_registry.h": "43358bc872ecc06034fc245ac956fbe9162e915c943c2f63c1c5d300c0254c8c",
       "player/nam_sha256.h": "028c31ff92dd56a5813be0727a344e009fa9c3c5b2e6ded9e77ffc4e3c3473d9",
       "player/patches/model.cpp.patch": "ada70ac1380c367babe5e973528b4de776433b8899b40e4d14d8a7e09125347d",
-      "player/stubs/nam_dispatch.cpp": "358030601f14078402c4b89ecbb834056b611eaefafc7f79ccb6c4ebba9c7241",
+      "player/stubs/nam_dispatch.cpp": "b32c3b4a1261a43db58aa281f8ca04b2af7ba110d2a9744525687b7326f8fc6a",
       "player/stubs/nam_dispatch.map": "5840a16197f6f8f1159aac06c895d050da9272fe29932a074fca277ba1296429",
       "player/stubs/nam_dispatch_trampoline.c": "d3af2e2bbe2c321c243718914823e6fbdde9061c6c9b6c1aefdf6ff6332c14ab",
       "player/stubs/nam_dispatch_trampoline.h": "2e752f2ab623de4b2aaa4d1f797382698c31c669ff9dd4bfc8caa37733c65335",
@@ -218,7 +247,7 @@
     },
     "ssh": {
       "schema": 1,
-      "created_utc": "2026-10-08T10:27:53.113474+00:00",
+      "created_utc": "2026-11-20T17:55:17.940274+00:00",
       "source": {
         "url": "https://dropbear.nl/mirror/releases/dropbear-2024.86.tar.bz2",
         "sha256": "e78936dffc395f2e0db099321d6be659190966b99712b55c530dd0a1822e0a5e",
@@ -255,7 +284,7 @@
         "tool": "aarch64-unknown-linux-gnu-strip",
         "sha256": "403f95d1e287b703b1d594d3a2dcdbdcf3b15ee135f6eb32f33f593683daf283"
       },
-      "build_directory": "run-ue9k_n_7",
+      "build_directory": "run-bjovcvpg",
       "outputs": {
         "dropbear": {
           "class": "ELF64",

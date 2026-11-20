@@ -1,6 +1,6 @@
 //! Tone Master Pro NAM SD-root card builder.
 //!
-//! Inputs: the owner's official firmware 1.8.58 bundle and the pinned assets in
+//! Inputs: an official firmware 1.8.58 or 1.8.85 bundle and the pinned assets in
 //! `device/`. Output: a card (or portable image) whose p1 is a FAT32 copy of the
 //! official kernel + DTB and whose p2 is a 4 GiB ext4 rootfs = official rootfs +
 //! the bounded change set in `rootfs.rs`. The internal eMMC is never touched.
@@ -70,6 +70,8 @@ pub struct Prepared {
     pub image: PathBuf,
     pub sha256: String,
     pub marker: Value,
+    /// The supported firmware the card was built from.
+    pub firmware: release::Firmware,
 }
 
 /// Which required host tools are missing (empty = ready).
@@ -93,23 +95,21 @@ pub fn build_rootfs(
     }
     device.verify(release)?;
     r.progress("Validating official firmware", 0, TOTAL);
-    let firmware_hash = firmware::validate_firmware(firmware, release)?;
+    let fw = firmware::validate_firmware(firmware, release)?;
     let build_id = uuid::Uuid::new_v4().to_string();
     let rootfs_uuid = uuid::Uuid::new_v4().to_string();
     let work = WorkDir::new()?;
 
     r.progress("Extracting firmware", 1, TOTAL);
-    let payload = firmware::unpack_bundle(firmware, work.path(), release)?;
+    let payload = firmware::unpack_bundle(firmware, work.path(), &fw)?;
     r.progress("Verifying firmware payload", 2, TOTAL);
-    if sha256_file(&payload, None, 0, None)? != release.firmware.payload.sha256 {
+    if sha256_file(&payload, None, 0, None)? != fw.payload.sha256 {
         return bail("extracted rootfs payload hash mismatch");
     }
     let rootfs = work.path().join("rootfs");
     let records = firmware::inventory(&payload)?;
     firmware::extract(&payload, &rootfs)?;
-    if sha256_file(&rootfs.join("home/root/tm-stomp-server"), None, 0, None)?
-        != release.engine_sha256
-    {
+    if sha256_file(&rootfs.join("home/root/tm-stomp-server"), None, 0, None)? != fw.engine_sha256 {
         return bail("NAM engine hash mismatch in extracted firmware");
     }
     // The payload and squashfs copy are no longer needed (≈1.1 GB).
@@ -122,7 +122,7 @@ pub fn build_rootfs(
         device,
         &build_id,
         &rootfs_uuid,
-        &firmware_hash,
+        &fw.sha256,
     )?;
     r.progress("Building root filesystem", 4, TOTAL);
     let image = work.path().join("rootfs.ext4");
@@ -134,6 +134,7 @@ pub fn build_rootfs(
         image,
         sha256: built.sha256,
         marker,
+        firmware: fw,
     })
 }
 
@@ -156,7 +157,7 @@ pub fn build_image(
         let card_sectors = release.minimum_card_bytes() / release.layout.sector_bytes;
         r.progress("Building portable image", 0, 2);
         let boot_fat = p.work.path().join("boot.fat");
-        image::create_boot_fat(&p.rootfs, &boot_fat, release)?;
+        image::create_boot_fat(&p.rootfs, &boot_fat, &p.firmware.boot, release)?;
         r.progress("Building portable image", 1, 2);
         image::assemble(output, &boot_fat, &p.image, card_sectors, release)?;
         r.progress("Building portable image", 2, 2);

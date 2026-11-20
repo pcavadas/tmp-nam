@@ -105,9 +105,9 @@ def main():
             target.chmod(0o755)
             artifacts[key] = {"file": target.name, "bytes": target.stat().st_size, "sha256": digest(target)}
         manifest = {
-            "schema": "tmp-player-build-v1",
-            "firmware_sha256": release["firmware"]["sha256"],
-            "engine_sha256": release["engine_sha256"],
+            "schema": "tmp-player-build-v2",
+            "firmwares": [{"sha256": fw["sha256"], "engine_sha256": fw["engine_sha256"]}
+                          for fw in release["firmwares"]],
             "artifacts": artifacts,
             "build": provenance,
         }

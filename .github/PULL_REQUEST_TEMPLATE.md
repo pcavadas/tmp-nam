@@ -11,7 +11,7 @@
 - [ ] `scripts/check.sh all`
 - [ ] Simulated unit (`TMP_NAM_SIM=1 bun run tauri dev`)
 - [ ] Image-file card built (`tmp-sdcard image …`) and audit passed
-- [ ] Verified on a real Tone Master Pro, firmware 1.8.58 (boot, audio, capture switching)
+- [ ] Verified on a real Tone Master Pro, firmware 1.8.58 or 1.8.85 — say which (boot, audio, capture switching)
 
 ## Checklist
 

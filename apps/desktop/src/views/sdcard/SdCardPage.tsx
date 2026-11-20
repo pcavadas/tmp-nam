@@ -25,7 +25,9 @@ import { copyText, errorText, formatBytes, plural } from "../../lib/format";
 import { useApp } from "../../state/context";
 import { CARD_PLATFORMS, FAILURES, STAGES } from "../../state/sd";
 
-const FIRMWARE = "ToneMasterPro_v1_8_58.img";
+/** Fender's download names for the supported versions, e.g. ToneMasterPro_v1_8_58.img. */
+const firmwareNames = (versions: string[]) =>
+  versions.map((v) => `ToneMasterPro_v${v.split(".").join("_")}.img`);
 const IS_MAC = navigator.userAgent.includes("Mac");
 
 /** Card-builder refusals (`tmp_sdcard::card`) in the guitarist's words. */
@@ -182,6 +184,8 @@ function Form({ onCreate }: { onCreate: () => void }) {
   const app = useApp();
   const { sd } = app;
   const env = sd.env;
+  const firmwareFiles = firmwareNames(env?.firmware_versions ?? []);
+  const firmwareList = firmwareFiles.join(" or ");
   const unsupported = env !== null && !CARD_PLATFORMS.includes(env.platform);
   const missing = unsupported ? [] : (env?.tools.filter((t) => !t.path) ?? []);
   const blocked = unsupported || missing.length > 0 || Boolean(env?.kit_error);
@@ -334,8 +338,8 @@ function Form({ onCreate }: { onCreate: () => void }) {
             ) : !fw ? (
               <>
                 <p className="small muted">
-                  The official <span className="mono">{FIRMWARE}</span> from
-                  Fender. Other versions won&apos;t work.
+                  The official <span className="mono">{firmwareList}</span>{" "}
+                  from Fender. Other versions won&apos;t work.
                 </p>
                 <div>
                   <Button
@@ -359,7 +363,7 @@ function Form({ onCreate }: { onCreate: () => void }) {
                     {folder && <div className="small muted3">In {folder}</div>}
                   </div>
                   <Tag tone={fwOk ? "ok" : "danger"}>
-                    {fwOk ? "Verified" : "Wrong file"}
+                    {fwOk ? `Verified ${fw.version ?? ""}`.trim() : "Wrong file"}
                   </Tag>
                   <Button
                     size="sm"
@@ -372,7 +376,7 @@ function Form({ onCreate }: { onCreate: () => void }) {
                 {!fwOk && (
                   <p className="small" style={{ color: "var(--danger)" }}>
                     This isn&apos;t the expected firmware. The card needs
-                    exactly {FIRMWARE}, unmodified. A renamed or partly
+                    exactly {firmwareList}, unmodified. A renamed or partly
                     downloaded file fails this check too.
                   </p>
                 )}

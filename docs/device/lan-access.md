@@ -2,7 +2,7 @@
 
 Card creation and boot checks are in [the SD-card guide](../sd-card.md). The **TMP NAM** desktop app manages captures and Tone3000 sync over the USB cable and needs none of this; Wi-Fi + SSH is the computer-free path (an SSH app on a phone works). Maintainer compilation and publication are described in [BUILDING.md](../../BUILDING.md).
 
-Stock 1.8.58 has ConnMan and an RTL8822CU Wi-Fi/Bluetooth radio but no SSH daemon. The normal device UI has no Wi-Fi screen. Avahi advertises `_ssh._tcp` even without a daemon listening.
+Stock firmware (1.8.58, 1.8.85) has ConnMan and an RTL8822CU Wi-Fi/Bluetooth radio but no SSH daemon. The normal device UI has no Wi-Fi screen. Avahi advertises `_ssh._tcp` even without a daemon listening.
 
 The card adds Dropbear SSH under internal `/data` and TONE3000 downloads into the User IR store. Joining a network is a separate step.
 

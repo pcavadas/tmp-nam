@@ -1,7 +1,7 @@
 # TMP NAM
 
 Neural amp model (NAM) playback for the owner's Fender Tone Master Pro
-(firmware **1.8.58** only), and the **TMP NAM** desktop app that runs it:
+(firmware **1.8.58** or **1.8.85**), and the **TMP NAM** desktop app that runs it:
 
 - **Captures** — list the NAM captures on the unit, add `.nam` files, remove them,
   pick the A2 network size (Feather … Full) and output gain per capture.
@@ -52,7 +52,7 @@ bun install
 bun run tauri dev        # TMP_NAM_SIM=1 bun run tauri dev  → simulated unit, no hardware
 ```
 
-Card building needs the official `ToneMasterPro_v1_8_58.img`; the released app bundles
+Card building needs the official `ToneMasterPro_v1_8_58.img` or `ToneMasterPro_v1_8_85.img`; the released app bundles
 everything else. Headless (uses `mke2fs`/`debugfs`/`e2fsck` from PATH, e.g.
 `brew install e2fsprogs`, 1.47 or later):
 
