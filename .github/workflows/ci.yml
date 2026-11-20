@@ -103,7 +103,8 @@ jobs:
       # (dependabot/dependabot-core#16026), so it raises no alerts for these packages.
       # GHSA-g3hv-75wg-m249 (minimatch <11.0.1, moderate, dev-only via typescript-eslint):
       # the fix is typescript-eslint >= 8.73.0, still inside the 7-day dependency
-      # cooldown; drop this --ignore with that update.
+      # cooldown. Needs a manual follow-up (no update tool does it): from 2026-11-23,
+      # `bun update typescript-eslint` in apps/desktop and remove this --ignore.
       - run: bun audit --ignore=GHSA-g3hv-75wg-m249
 
   bundle:
